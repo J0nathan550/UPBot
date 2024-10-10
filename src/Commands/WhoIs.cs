@@ -2,7 +2,9 @@
 using System.Threading.Tasks;
 using DSharpPlus.Entities;
 using DSharpPlus.SlashCommands;
-using UPBot.UPBot_Code;
+
+namespace UPBot.src.Commands;
+
 
 /// <summary>
 /// This command implements a WhoIs command.
@@ -15,7 +17,7 @@ public class SlashWhoIs : ApplicationCommandModule
 {
 
     [SlashCommand("whois", "Get information about a specific user (or yourself)")]
-    public async Task WhoIsCommand(InteractionContext ctx, [Option("user", "The user to get info from")] DiscordUser user = null)
+    public static async Task WhoIsCommand(InteractionContext ctx, [Option("user", "The user to get info from")] DiscordUser user = null)
     {
         Utils.LogUserCommand(ctx);
 

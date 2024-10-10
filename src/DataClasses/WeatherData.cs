@@ -1,20 +1,20 @@
 ﻿using Newtonsoft.Json;
 using System.Collections.Generic;
 
-namespace UPBot.UPBot_Code.DataClasses;
+namespace UPBot.src.DataClasses;
 public class WeatherData
 {
     [JsonProperty("location")]
-    public Location location { get; set; }
+    public LocationClass Location { get; set; }
 
     [JsonProperty("current")]
-    public Current current { get; set; }
+    public CurrentClass Current { get; set; }
 
     [JsonProperty("forecast")]
-    public Forecast forecast { get; set; }
+    public ForecastClass Forecast { get; set; }
 
     [JsonProperty("alerts")]
-    public Alerts alerts { get; set; }
+    public AlertsClass Alerts { get; set; }
 
     public class AirQuality
     {
@@ -85,7 +85,7 @@ public class WeatherData
         public string Instruction { get; set; }
     }
 
-    public class Alerts
+    public class AlertsClass
     {
         [JsonProperty("alert")]
         public List<Alert> Alert { get; set; }
@@ -130,7 +130,7 @@ public class WeatherData
         public int Code { get; set; }
     }
 
-    public class Current
+    public class CurrentClass
     {
         [JsonProperty("last_updated_epoch")]
         public int LastUpdatedEpoch { get; set; }
@@ -271,7 +271,7 @@ public class WeatherData
         public AirQuality AirQuality { get; set; }
     }
 
-    public class Forecast
+    public class ForecastClass
     {
         [JsonProperty("forecastday")]
         public List<Forecastday> Forecastday { get; set; }
@@ -400,7 +400,7 @@ public class WeatherData
         public AirQuality AirQuality { get; set; }
     }
 
-    public class Location
+    public class LocationClass
     {
         [JsonProperty("name")]
         public string Name { get; set; }

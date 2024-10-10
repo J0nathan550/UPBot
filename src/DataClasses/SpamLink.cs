@@ -1,4 +1,6 @@
-﻿public class SpamLink : Entity
+﻿namespace UPBot.src.DataClasses;
+
+public class SpamLink : Entity
 {
     [Key] public ulong Guild;
     [Key] public string link;

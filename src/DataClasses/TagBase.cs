@@ -1,5 +1,7 @@
 using System;
 
+namespace UPBot.src.DataClasses;
+
 public class TagBase : Entity
 {
     [Key] public ulong Guild;

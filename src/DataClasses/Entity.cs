@@ -1,6 +1,8 @@
 ﻿using System;
 using System.Reflection;
 
+namespace UPBot.src.DataClasses;
+
 public class Entity
 {
 

@@ -1,4 +1,6 @@
-﻿public class Timezone : Entity
+﻿namespace UPBot.src.DataClasses;
+
+public class Timezone : Entity
 {
     [Key]
     public ulong User; // Timezones are not related to guilds

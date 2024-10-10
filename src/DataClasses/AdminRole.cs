@@ -1,4 +1,6 @@
-﻿public class AdminRole : Entity
+﻿namespace UPBot.src.DataClasses;
+
+public class AdminRole : Entity
 {
     [Key] public ulong Guild;
     [Key] public ulong Role;

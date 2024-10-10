@@ -1,6 +1,9 @@
 ﻿using System.Threading.Tasks;
 using DSharpPlus.SlashCommands;
-using UPBot.UPBot_Code;
+using UPBot.src;
+
+namespace UPBot.src.Commands;
+
 
 /// <summary>
 /// This command implements a Version command.
@@ -13,7 +16,7 @@ public class SlashVersion : ApplicationCommandModule
 {
 
     [SlashCommand("version", "Get my version information")]
-    public async Task VInfoCommand(InteractionContext ctx)
+    public static async Task VInfoCommand(InteractionContext ctx)
     {
         string authors = "**CPU**, **J0nathan**, **Eremiell**, **Duck**, **SlicEnDicE**, **Apoorv**, **Revolution**";
 

@@ -1,10 +1,13 @@
-﻿public class WeatherAPIKey : Entity {
-  [Key] public string WeatherApiKey;
+﻿namespace UPBot.src.DataClasses;
 
-  public WeatherAPIKey() { }
+public class WeatherAPIKey : Entity
+{
+    [Key] public string WeatherApiKey;
 
-  public WeatherAPIKey(string key) {
-    WeatherApiKey = key;
-  }
+    public WeatherAPIKey() { }
 
+    public WeatherAPIKey(string key)
+    {
+        WeatherApiKey = key;
+    }
 }
