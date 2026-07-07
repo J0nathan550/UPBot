@@ -60,6 +60,16 @@ public class Configs
     {
         try
         {
+            Guilds.Clear();
+            TrackChannels.Clear();
+            AdminRoles.Clear();
+            SpamProtections.Clear();
+            Tags.Clear();
+            SpamLinks.Clear();
+            WhiteListLinks.Clear();
+            TempRoleSelected.Clear();
+            WeatherAPIKey = null;
+
             foreach (var g in Utils.GetClient().Guilds.Values)
             {
                 Guilds[g.Id] = g;
@@ -159,6 +169,7 @@ public class Configs
 
             botId = Utils.GetClient().CurrentUser.Id;
 
+            Utils.Log("[CONFIG] Loaded admin roles=" + AdminRoles.Count + ", track channels=" + TrackChannels.Count + ", tags=" + Tags.Count + ", spam protections=" + SpamProtections.Count + ", spam links=" + SpamLinks.Count + ", whitelist links=" + WhiteListLinks.Count + ", weather key=" + (string.IsNullOrWhiteSpace(WeatherAPIKey) ? "missing" : "set"), null);
             Utils.Log("Params fully loaded. " + SpamProtections.Count + " Discord servers found", null);
         }
         catch (Exception ex)

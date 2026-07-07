@@ -676,7 +676,7 @@ namespace UPBot
             {
                 actions =
                 [
-                    tc.trackJoin ? new DiscordButtonComponent(DSharpPlus.ButtonStyle.Primary, "idaltertrackjoin", "Track Joint", false, ey) : new DiscordButtonComponent(DSharpPlus.ButtonStyle.Secondary, "idaltertrackjoin", "Track Joint", false, en),
+                    tc.trackJoin ? new DiscordButtonComponent(DSharpPlus.ButtonStyle.Primary, "idaltertrackjoin", "Track Join", false, ey) : new DiscordButtonComponent(DSharpPlus.ButtonStyle.Secondary, "idaltertrackjoin", "Track Joint", false, en),
                     tc.trackLeave ? new DiscordButtonComponent(DSharpPlus.ButtonStyle.Primary, "idaltertrackleave", "Track Leave", false, ey) : new DiscordButtonComponent(DSharpPlus.ButtonStyle.Secondary, "idaltertrackleave", "Track Leave", false, en),
                     tc.trackRoles ? new DiscordButtonComponent(DSharpPlus.ButtonStyle.Primary, "idaltertrackroles", "Track Roles", false, ey) : new DiscordButtonComponent(DSharpPlus.ButtonStyle.Secondary, "idaltertrackroles", "Track Roles", false, en),
                 ];
@@ -708,9 +708,8 @@ namespace UPBot
             bool esteam = sp != null && sp.protectSteam;
             bool eepic = sp != null && sp.protectEpic;
             eb.Description = "Configuration of the UP Bot for the Discord Server **" + ctx.Guild.Name + "**\n\n" +
-              "The **Spam Protection** is a feature of the bot used to watch all posts contain links.\n" +
-              "If the link is a counterfait Discord (or Steam, or Epic) link (usually a false free nitro,\n" +
-              "then the link will be immediately removed.\n\n**Spam Protection** for\n";
+              "The **Scam Protection** feature watches messages for suspicious repeat-content and image-spam patterns.\n" +
+              "Custom black/white list entries are stored in the SQLite database and can be managed below.\n\n**Spam Protection** for\n";
             eb.Description += "**Discord Nitro** feature is " + (edisc ? "_Enabled_" : "_Disabled_") + " (_recommended!_)\n";
             eb.Description += "**Steam** feature is " + (esteam ? "_Enabled_" : "_Disabled_") + "\n";
             eb.Description += "**Epic Game Store** feature is " + (eepic ? "_Enabled_" : "_Disabled_") + "\n";
@@ -754,9 +753,10 @@ namespace UPBot
             };
             eb.WithThumbnail(ctx.Guild.IconUrl);
             eb.Description = "Configuration of the UP Bot for the Discord Server **" + ctx.Guild.Name + "**\n\n" +
-              "White List of links for the **Spam Protection**, these links will always be allowed.\n" +
+              "White List of links for the **Scam Protection**, these links will always be allowed.\n" +
               "Add with the button a link that will always be accepted in all posted messages.\n" +
-              "Click on an existing link button to remove it from the white list";
+              "Click on an existing link button to remove it from the white list.\n" +
+              "Entries are stored in SQLite for this server.";
             eb.WithImageUrl(ctx.Guild.BannerUrl);
             eb.WithFooter("Member that started the configuration is: " + ctx.Member.DisplayName, ctx.Member.AvatarUrl);
 
@@ -807,9 +807,10 @@ namespace UPBot
             };
             eb.WithThumbnail(ctx.Guild.IconUrl);
             eb.Description = "Configuration of the UP Bot for the Discord Server **" + ctx.Guild.Name + "**\n\n" +
-              "Black List of links for the **Spam Protection**\n" +
+              "Black List of links for the **Scam Protection**.\n" +
               "Add with the button a link that will be banned from all messages posted.\n" +
-              "Click on an existing link button to remove it from the black list";
+              "Click on an existing link button to remove it from the black list.\n" +
+              "Entries are stored in SQLite for this server.";
             eb.WithImageUrl(ctx.Guild.BannerUrl);
             eb.WithFooter("Member that started the configuration is: " + ctx.Member.DisplayName, ctx.Member.AvatarUrl);
 

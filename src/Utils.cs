@@ -15,7 +15,7 @@ namespace UPBot.UPBot_Code;
 /// </summary>
 public static class Utils
 {
-    public const int vmajor = 0, vminor = 3, vbuild = 6;
+    public const int vmajor = 0, vminor = 3, vbuild = 7;
     public const char vrev = ' ';
     public static string LogsFolder = "./";
     public static readonly System.Diagnostics.StackTrace sttr = new();
@@ -42,7 +42,7 @@ public static class Utils
 
     public static string GetVersion()
     {
-        return vmajor + "." + vminor + "." + vbuild + vrev + " - 2025/08/30";
+        return vmajor + "." + vminor + "." + vbuild + vrev + " - 2026/07/07";
     }
 
     public static DiscordClient GetClient()
