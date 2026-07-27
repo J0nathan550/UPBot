@@ -46,6 +46,7 @@ namespace UPBot
         }
 
         private static readonly CancellationTokenSource exitToken = new();
+        private static bool eventsRegistered = false; // guards against re-subscribing handlers on Ready re-fires (reconnects)
 
         private static async Task MainAsync(string token)
         {
@@ -269,24 +270,36 @@ namespace UPBot
             Configs.LoadParams();
             Console.ForegroundColor = ConsoleColor.White;
 
-            Console.ForegroundColor = ConsoleColor.Green;
-            Utils.Log("Adding action events", null);
-            client.GuildMemberAdded += MembersTracking.DiscordMemberAdded;
-            client.GuildMemberRemoved += MembersTracking.DiscordMemberRemoved;
-            client.GuildMemberUpdated += MembersTracking.DiscordMemberUpdated;
+            if (!eventsRegistered)
+            {
+                eventsRegistered = true;
 
-            client.MessageCreated += async (s, e) => { await CheckSpam.CheckMessageCreate(s, e); };
-            client.MessageUpdated += async (s, e) => { await CheckSpam.CheckMessageUpdate(s, e); };
-            Console.ForegroundColor = ConsoleColor.White;
+                Console.ForegroundColor = ConsoleColor.Green;
+                Utils.Log("Adding action events", null);
+                client.GuildMemberAdded += MembersTracking.DiscordMemberAdded;
+                client.GuildMemberRemoved += MembersTracking.DiscordMemberRemoved;
+                client.GuildMemberUpdated += MembersTracking.DiscordMemberUpdated;
 
-            Console.ForegroundColor = ConsoleColor.Yellow;
-            Utils.Log("Tracking", null);
-            Console.ForegroundColor = ConsoleColor.White;
+                client.MessageCreated += async (s, e) => { await CheckSpam.CheckMessageCreate(s, e); };
+                client.MessageUpdated += async (s, e) => { await CheckSpam.CheckMessageUpdate(s, e); };
+                Console.ForegroundColor = ConsoleColor.White;
 
-            Utils.Log("DiscordRichPresence", null);
-            DiscordStatus.Start(client);
+                Console.ForegroundColor = ConsoleColor.Yellow;
+                Utils.Log("Tracking", null);
+                Console.ForegroundColor = ConsoleColor.White;
 
-            client.GuildCreated += Configs.NewGuildAdded;
+                Utils.Log("DiscordRichPresence", null);
+                DiscordStatus.Start(client);
+
+                client.GuildCreated += Configs.NewGuildAdded;
+            }
+            else
+            {
+                Console.ForegroundColor = ConsoleColor.Yellow;
+                Utils.Log("Ready re-fired (reconnect) - skipping event re-registration to avoid duplicate handlers", null);
+                Console.ForegroundColor = ConsoleColor.White;
+            }
+
             Console.ForegroundColor = ConsoleColor.Green;
             Utils.Log("--->>> Bot ready <<<---", null);
             Console.ForegroundColor = ConsoleColor.White;

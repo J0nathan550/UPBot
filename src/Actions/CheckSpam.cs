@@ -243,7 +243,22 @@ namespace UPBot
             catch (Exception ex)
             {
                 if (ex is DSharpPlus.Exceptions.NotFoundException) return;
-                await message.RespondAsync(Utils.GenerateErrorAnswer(guild.Name, "CheckSpam.CheckMessage", ex));
+                await ReportErrorToModChannel(guild, "CheckSpam.CheckMessage", ex);
+            }
+        }
+
+        private static async Task ReportErrorToModChannel(DiscordGuild guild, string context, Exception ex)
+        {
+            try
+            {
+                if (Configs.TrackChannels.TryGetValue(guild.Id, out TrackChannel trackChannel) && trackChannel?.channel != null)
+                    await trackChannel.channel.SendMessageAsync(Utils.GenerateErrorAnswer(guild.Name, context, ex));
+                else
+                    Utils.Log($"[ERROR] {context}: {ex.Message} (no mod/log channel configured to report to)", guild.Name);
+            }
+            catch (Exception logEx)
+            {
+                Utils.Log($"[ERROR] Failed to report error to mod channel: {logEx.Message}", guild.Name);
             }
         }
 
@@ -542,16 +557,6 @@ namespace UPBot
             return result;
         }
 
-        /// <summary>
-        /// Sends the anti-spam action embed to this guild's configured tracking channel
-        /// (set via /setup). Falls back to downloading and re-attaching the offending
-        /// images if the original message can no longer be linked/read.
-        ///
-        /// Note: DSharpPlus does not expose Discord's native "forward message" reference
-        /// type the way Discord.Net does in the CoopAndreas bot, so this links to the
-        /// original message (jump link + reply) instead of a true forward. Functionally
-        /// equivalent for a moderator reviewing the log, but flagging the difference.
-        /// </summary>
         private static async Task LogAction(
             DiscordGuild guild, DiscordMember user, string actionType, string reason, string duration,
             string messageContent, int imageCount, List<string> imageUrls, DiscordMessage originalMessage)
@@ -587,30 +592,13 @@ namespace UPBot
                 if (imageCount > 0)
                     eb.AddField("Images / Attachments", imageCount.ToString(), true);
 
-                if (originalMessage != null)
-                {
-                    try
-                    {
-                        await logChannel.SendMessageAsync(eb.Build());
-
-                        var linkMsg = new DiscordMessageBuilder()
-                            .WithContent($"🔗 Original message: {originalMessage.JumpLink}")
-                            .WithReply(originalMessage.Id, mention: false, failOnInvalidReply: false);
-                        await logChannel.SendMessageAsync(linkMsg);
-
-                        Utils.Log($"[LOG] Linked original message from {user.Username} in the log channel.", guild.Name);
-                        return;
-                    }
-                    catch (Exception ex)
-                    {
-                        Utils.Log($"[WARN] Linking original message failed, falling back to image download: {ex.Message}", guild.Name);
-                    }
-                }
+                DiscordMessageBuilder mb = new DiscordMessageBuilder().AddEmbed(eb.Build());
+                List<(MemoryStream Stream, string Filename)> imageData = [];
 
                 if (imageUrls != null && imageUrls.Count > 0)
                 {
-                    Utils.Log($"[IMAGE BACKUP] Downloading {imageUrls.Count} image(s) for {user.Username}…", guild.Name);
-                    var imageData = await DownloadImagesToMemory(imageUrls);
+                    Utils.Log($"[LOG] Downloading {imageUrls.Count} image(s) from {user.Username}'s message to re-attach…", guild.Name);
+                    imageData = await DownloadImagesToMemory(imageUrls);
 
                     if (imageData.Count > 0)
                     {
@@ -618,33 +606,27 @@ namespace UPBot
                         if (imageData.Count > maxFiles)
                             eb.AddField("⚠️ Truncated", $"Showing {maxFiles} of {imageData.Count} images.", false);
 
-                        var mb = new DiscordMessageBuilder().AddEmbed(eb.Build());
+                        mb = new DiscordMessageBuilder().AddEmbed(eb.Build());
                         foreach (var (stream, filename) in imageData.Take(maxFiles))
                             mb.AddFile(filename, stream);
-
-                        try
-                        {
-                            await logChannel.SendMessageAsync(mb);
-                            Utils.Log($"[LOG] Sent embed + {Math.Min(imageData.Count, maxFiles)} attachment(s) for {user.Username}.", guild.Name);
-                        }
-                        catch (Exception ex)
-                        {
-                            Utils.Log($"[WARN] Sending attachments failed: {ex.Message}", guild.Name);
-                            await logChannel.SendMessageAsync(eb.Build());
-                        }
-                        finally
-                        {
-                            foreach (var (stream, _) in imageData)
-                                stream.Dispose();
-                        }
-
-                        return;
                     }
-
-                    eb.AddField("⚠️ Image Backup", "Images could not be downloaded (URLs may have expired).", false);
+                    else
+                    {
+                        eb.AddField("⚠️ Image Backup", "Images could not be downloaded (URLs may have expired).", false);
+                        mb = new DiscordMessageBuilder().AddEmbed(eb.Build());
+                    }
                 }
 
-                await logChannel.SendMessageAsync(eb.Build());
+                try
+                {
+                    await logChannel.SendMessageAsync(mb);
+                    Utils.Log($"[LOG] Sent anti-spam log with {imageData.Count} re-attached image(s) for {user.Username}.", guild.Name);
+                }
+                finally
+                {
+                    foreach (var (stream, _) in imageData)
+                        stream.Dispose();
+                }
             }
             catch (Exception ex)
             {
