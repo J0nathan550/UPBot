@@ -1,5 +1,6 @@
-﻿using DSharpPlus.Entities;
-using DSharpPlus.SlashCommands;
+using Discord;
+using Discord.Interactions;
+using Discord.WebSocket;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
@@ -15,25 +16,25 @@ using UPBot.UPBot_Code;
 namespace UPBot
 {
 
-    [SlashCommandGroup("tz", "Commands to check timezones")]
-    public class SlashTimezone : ApplicationCommandModule
+    [Group("tz", "Commands to check timezones")]
+    public class SlashTimezone : InteractionModuleBase<SocketInteractionContext>
     {
         [SlashCommand("whattimeis", "Checks the current local time in a timezone")]
-        public async Task TZTimeCommand(InteractionContext ctx, [Option("timezone", "Timezone to check the local time")] string tz)
+        public async Task TZTimeCommand([Summary("timezone", "Timezone to check the local time")] string tz)
         {
-            Utils.LogUserCommand(ctx);
+            Utils.LogUserCommand(Context);
 
             try
             {
                 List<RankedTimezone> res = GetTimezone(tz, out TimeZoneInfo tzi);
                 if (res == null && tzi == null)
                 {
-                    await ctx.CreateResponseAsync($"I cannot find a timezone similar to {tz}.", true);
+                    await RespondAsync($"I cannot find a timezone similar to {tz}.", ephemeral: true);
                 }
                 else if (tzi != null)
                 {
                     DateTime dest = TimeZoneInfo.ConvertTime(DateTime.Now, tzi);
-                    await ctx.CreateResponseAsync($"Current time in the timezone is {dest:HH:mm:ss}\n{GetTZName(tzi)}");
+                    await RespondAsync($"Current time in the timezone is {dest:HH:mm:ss}\n{GetTZName(tzi)}");
                 }
                 else
                 {
@@ -45,60 +46,60 @@ namespace UPBot
                             msg += "(" + r.Score + ") " + GetTZName(ttz) + "\n";
                         }
                     }
-                    await ctx.CreateResponseAsync(msg, true);
+                    await RespondAsync(msg, ephemeral: true);
                 }
             }
             catch (Exception ex)
             {
-                if (ex is DSharpPlus.Exceptions.NotFoundException) return; // Timed out
-                await ctx.CreateResponseAsync(Utils.GenerateErrorAnswer(ctx.Guild.Name, "WhatTimeIs", ex), true);
+                if (ex is Discord.Net.HttpException httpEx && httpEx.HttpCode == System.Net.HttpStatusCode.NotFound) return; // Timed out
+                await RespondAsync(embed: Utils.GenerateErrorAnswer(Context.Guild.Name, "WhatTimeIs", ex), ephemeral: true);
             }
         }
 
         [SlashCommand("whattimeisfor", "Checks the current local time for an user")]
-        public async Task TZTimeGetCommand(InteractionContext ctx, [Option("user", "The user for the time")] DiscordUser user)
+        public async Task TZTimeGetCommand([Summary("user", "The user for the time")] IUser user)
         {
-            Utils.LogUserCommand(ctx);
+            Utils.LogUserCommand(Context);
 
             try
             {
-                DiscordMember member = await ctx.Guild.GetMemberAsync(user.Id);
+                SocketGuildUser member = Context.Guild.GetUser(user.Id);
                 Timezone utz = Database.GetByKey<Timezone>(user.Id);
                 if (utz == null)
                 {
-                    await ctx.CreateResponseAsync($"Timezone for user {member.DisplayName} is not defined", true);
+                    await RespondAsync($"Timezone for user {member.DisplayName} is not defined", ephemeral: true);
                     return;
                 }
 
                 if (!TZConvert.TryGetTimeZoneInfo(utz.TimeZoneName, out var tzinfo))
                 {
-                    await ctx.CreateResponseAsync($"Timezone for user {member.DisplayName} is not clear: {utz.TimeZoneName}", true);
+                    await RespondAsync($"Timezone for user {member.DisplayName} is not clear: {utz.TimeZoneName}", ephemeral: true);
                     return;
                 }
 
                 DateTime dest = TimeZoneInfo.ConvertTime(DateTime.Now, tzinfo);
-                await ctx.CreateResponseAsync($"Current time for user {member.DisplayName} is {dest:HH:mm:ss}\n{GetTZName(tzinfo)}");
+                await RespondAsync($"Current time for user {member.DisplayName} is {dest:HH:mm:ss}\n{GetTZName(tzinfo)}");
             }
             catch (Exception ex)
             {
-                if (ex is DSharpPlus.Exceptions.NotFoundException) return; // Timed out
-                await ctx.CreateResponseAsync(Utils.GenerateErrorAnswer(ctx.Guild.Name, "WhatTimeIsFor", ex), true);
+                if (ex is Discord.Net.HttpException httpEx && httpEx.HttpCode == System.Net.HttpStatusCode.NotFound) return; // Timed out
+                await RespondAsync(embed: Utils.GenerateErrorAnswer(Context.Guild.Name, "WhatTimeIsFor", ex), ephemeral: true);
             }
         }
 
         [SlashCommand("set", "Set the timezone for a user")]
-        public async Task TZSetCommand(InteractionContext ctx, [Option("user", "The user to set the timezone")] DiscordUser user, [Option("timezone", "Timezone to check the local time")] string tz)
+        public async Task TZSetCommand([Summary("user", "The user to set the timezone")] IUser user, [Summary("timezone", "Timezone to check the local time")] string tz)
         {
             try
             {
-                DiscordMember member = await ctx.Guild.GetMemberAsync(user.Id);
-                if (!Configs.HasAdminRole(ctx.Guild.Id, member.Roles, false) && user.Id != ctx.User.Id) { Utils.DefaultNotAllowed(ctx); return; }
-                Utils.LogUserCommand(ctx);
+                SocketGuildUser member = Context.Guild.GetUser(user.Id);
+                if (!Configs.HasAdminRole(Context.Guild.Id, member.Roles, false) && user.Id != Context.User.Id) { Utils.DefaultNotAllowed(Context); return; }
+                Utils.LogUserCommand(Context);
 
                 List<RankedTimezone> res = GetTimezone(tz, out TimeZoneInfo tzi);
                 if (res == null && tzi == null)
                 {
-                    await ctx.CreateResponseAsync($"I cannot find a timezone similar to {tz}.", true);
+                    await RespondAsync($"I cannot find a timezone similar to {tz}.", ephemeral: true);
                 }
                 else if (tzi != null)
                 {
@@ -106,7 +107,7 @@ namespace UPBot
                     string tzid = tzi.Id;
                     if (TZConvert.TryWindowsToIana(tzid, out string tzname)) tzid = tzname;
                     Database.Add(new Timezone(user.Id, tzid));
-                    await ctx.CreateResponseAsync($"Timezone for user {member.DisplayName} is set to {GetTZName(tzi)}. Current time for they is {dest:HH:mm:ss}");
+                    await RespondAsync($"Timezone for user {member.DisplayName} is set to {GetTZName(tzi)}. Current time for they is {dest:HH:mm:ss}");
                 }
                 else
                 {
@@ -122,19 +123,19 @@ namespace UPBot
                         }
                     }
 
-                    await ctx.CreateResponseAsync(msg);
+                    await RespondAsync(msg);
                 }
             }
             catch (Exception ex)
             {
-                if (ex is DSharpPlus.Exceptions.NotFoundException) return; // Timed out
-                await ctx.CreateResponseAsync(Utils.GenerateErrorAnswer(ctx.Guild.Name, "Set Timezone", ex), true);
+                if (ex is Discord.Net.HttpException httpEx && httpEx.HttpCode == System.Net.HttpStatusCode.NotFound) return; // Timed out
+                await RespondAsync(embed: Utils.GenerateErrorAnswer(Context.Guild.Name, "Set Timezone", ex), ephemeral: true);
             }
         }
 
 
         [SlashCommand("list", "List all timezones with how many users are in each one")]
-        public async Task TZListCommand(InteractionContext ctx)
+        public async Task TZListCommand()
         {
             try
             {
@@ -169,12 +170,12 @@ namespace UPBot
                     res += numbads + " Unknown timezones: " + bads[..^2] + "\n";
                 }
                 res += "```";
-                await ctx.CreateResponseAsync(res);
+                await RespondAsync(res);
             }
             catch (Exception ex)
             {
-                if (ex is DSharpPlus.Exceptions.NotFoundException) return; // Timed out
-                await ctx.CreateResponseAsync(Utils.GenerateErrorAnswer(ctx.Guild.Name, "List Timezones", ex), true);
+                if (ex is Discord.Net.HttpException httpEx && httpEx.HttpCode == System.Net.HttpStatusCode.NotFound) return; // Timed out
+                await RespondAsync(embed: Utils.GenerateErrorAnswer(Context.Guild.Name, "List Timezones", ex), ephemeral: true);
             }
         }
 

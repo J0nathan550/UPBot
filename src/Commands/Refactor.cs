@@ -1,8 +1,9 @@
-using DSharpPlus;
-using DSharpPlus.Entities;
-using DSharpPlus.SlashCommands;
+using Discord;
+using Discord.Interactions;
+using Discord.WebSocket;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using UPBot.UPBot_Code;
@@ -15,7 +16,7 @@ using UPBot.UPBot_Code;
 
 namespace UPBot
 {
-    public class SlashRefactor : ApplicationCommandModule
+    public class SlashRefactor : InteractionModuleBase<SocketInteractionContext>
     {
         private enum Action
         {
@@ -31,19 +32,20 @@ namespace UPBot
 
 
         [SlashCommand("whatlanguage", "Checks the programming language of a post")]
-        public async Task CheckLanguage(InteractionContext ctx, [Option("Member", "The user that posted the message to check")] DiscordUser user = null)
+        public async Task CheckLanguage([Summary("member", "The user that posted the message to check")] IUser user = null)
         {
             // Checks the language of some code posted
-            Utils.LogUserCommand(ctx);
+            Utils.LogUserCommand(Context);
 
             try
             {
                 // Get last post that looks like code
                 ulong usrId = user == null ? 0 : user.Id;
-                IReadOnlyList<DiscordMessage> msgs = await ctx.Channel.GetMessagesAsync(50);
+                ITextChannel channel = Context.Channel as ITextChannel;
+                var msgs = (await channel.GetMessagesAsync(50).FlattenAsync()).ToList();
                 for (int i = 0; i < msgs.Count; i++)
                 {
-                    DiscordMessage m = msgs[i];
+                    IMessage m = msgs[i];
                     if (usrId != 0 && m.Author.Id != usrId) continue;
                     Langs lang = GetBestMatch(m.Content, out int weightCs, out int weightCp, out int weightJv, out int weightJs, out int weightPy, out int weightUn);
                     string guessed = lang switch
@@ -57,33 +59,34 @@ namespace UPBot
                         _ => "no one"
                     };
                     string usrname = user == null ? "last code" : user.Username + "'s code";
-                    await ctx.CreateResponseAsync($"Best guess for the language in {usrname} is: {guessed}\nC# = {weightCs}  C++ = {weightCp}  Java = {weightJv}  Javascript = {weightJs}  Python = {weightPy}  Unity C# = {weightUn}");
+                    await RespondAsync($"Best guess for the language in {usrname} is: {guessed}\nC# = {weightCs}  C++ = {weightCp}  Java = {weightJv}  Javascript = {weightJs}  Python = {weightPy}  Unity C# = {weightUn}");
                 }
 
-                await ctx.CreateResponseAsync("Cannot find something that looks like code.");
+                await RespondAsync("Cannot find something that looks like code.");
             }
             catch (Exception ex)
             {
-                await ctx.CreateResponseAsync(Utils.GenerateErrorAnswer(ctx.Guild.Name, "WhatLanguage", ex));
+                await RespondAsync(embed: Utils.GenerateErrorAnswer(Context.Guild.Name, "WhatLanguage", ex));
             }
         }
 
         // Refactors the previous post, if it is code, without removing it
         [SlashCommand("format", "Format a specified post (from a user, if specified) as code block")]
-        public async Task FactorCommand(InteractionContext ctx, [Option("Member", "The user that posted the message to format")] DiscordUser user = null)
+        public async Task FactorCommand([Summary("member", "The user that posted the message to format")] IUser user = null)
         {
-            Utils.LogUserCommand(ctx);
+            Utils.LogUserCommand(Context);
 
             try
             {
                 // Get last post that looks like code
-                DiscordMessage msg = null;
+                IMessage msg = null;
                 Langs lang = Langs.NONE;
                 ulong usrId = user == null ? 0 : user.Id;
-                IReadOnlyList<DiscordMessage> msgs = await ctx.Channel.GetMessagesAsync(50);
+                ITextChannel channel = Context.Channel as ITextChannel;
+                var msgs = (await channel.GetMessagesAsync(50).FlattenAsync()).ToList();
                 for (int i = 0; i < msgs.Count; i++)
                 {
-                    DiscordMessage m = msgs[i];
+                    IMessage m = msgs[i];
                     if (usrId != 0 && m.Author.Id != usrId) continue;
                     lang = GetBestMatch(m.Content, out _, out _, out _, out _, out _, out _);
                     if (lang != Langs.NONE)
@@ -94,7 +97,7 @@ namespace UPBot
                 }
                 if (msg == null)
                 {
-                    await ctx.CreateResponseAsync("Cannot find something that looks like code.");
+                    await RespondAsync("Cannot find something that looks like code.");
                     return;
                 }
 
@@ -118,16 +121,16 @@ namespace UPBot
 
                 if (code.Length < 1990)
                 { // Single message
-                    await ctx.CreateResponseAsync(code);
-                    DiscordMessage replacement = await ctx.GetOriginalResponseAsync();
+                    await RespondAsync(code);
+                    IUserMessage replacement = await GetOriginalResponseAsync();
                     try
                     {
-                        await replacement.CreateReactionAsync(Utils.GetEmoji(EmojiEnum.AutoRefactored));
-                        await replacement.CreateReactionAsync(Utils.GetEmoji(langEmoji));
+                        await replacement.AddReactionAsync(Utils.GetEmoji(EmojiEnum.AutoRefactored));
+                        await replacement.AddReactionAsync(Utils.GetEmoji(langEmoji));
                     }
                     catch (Exception e)
                     {
-                        Utils.Log("Cannot add an emoji: " + e.Message, ctx.Guild.Name);
+                        Utils.Log("Cannot add an emoji: " + e.Message, Context.Guild.Name);
                     }
                 }
                 else
@@ -141,30 +144,30 @@ namespace UPBot
                         if (first)
                         {
                             first = false;
-                            await ctx.CreateResponseAsync(codepart);
+                            await RespondAsync(codepart);
                         }
                         else
                         {
-                            await ctx.Channel.SendMessageAsync(codepart);
+                            await channel.SendMessageAsync(codepart);
                         }
                     }
                     // Post the last part as is
-                    DiscordMessage replacement = await ctx.Channel.SendMessageAsync(code);
+                    IUserMessage replacement = await channel.SendMessageAsync(code);
                     try
                     {
-                        await replacement.CreateReactionAsync(Utils.GetEmoji(EmojiEnum.AutoRefactored));
-                        await replacement.CreateReactionAsync(Utils.GetEmoji(langEmoji));
+                        await replacement.AddReactionAsync(Utils.GetEmoji(EmojiEnum.AutoRefactored));
+                        await replacement.AddReactionAsync(Utils.GetEmoji(langEmoji));
                     }
                     catch (Exception e)
                     {
-                        Utils.Log("Cannot add an emoji: " + e.Message, ctx.Guild.Name);
+                        Utils.Log("Cannot add an emoji: " + e.Message, Context.Guild.Name);
                     }
                 }
 
             }
             catch (Exception ex)
             {
-                await ctx.CreateResponseAsync(Utils.GenerateErrorAnswer(ctx.Guild.Name, "Refactor", ex));
+                await RespondAsync(embed: Utils.GenerateErrorAnswer(Context.Guild.Name, "Refactor", ex));
             }
         }
 
@@ -228,20 +231,21 @@ namespace UPBot
 
         // Refactors the previous post, if it is code, replacing it
         [SlashCommand("reformat", "Reformat a specified post as code block, the original message will be deleted")]
-        public async Task RefactorCommand(InteractionContext ctx, [Option("Member", "The user that posted the message to format")] DiscordUser user = null)
+        public async Task RefactorCommand([Summary("member", "The user that posted the message to format")] IUser user = null)
         {
-            Utils.LogUserCommand(ctx);
+            Utils.LogUserCommand(Context);
 
             try
             {
                 // Get last post that looks like code
-                DiscordMessage msg = null;
+                IMessage msg = null;
                 Langs lang = Langs.NONE;
                 ulong usrId = user == null ? 0 : user.Id;
-                IReadOnlyList<DiscordMessage> msgs = await ctx.Channel.GetMessagesAsync(50);
+                ITextChannel channel = Context.Channel as ITextChannel;
+                var msgs = (await channel.GetMessagesAsync(50).FlattenAsync()).ToList();
                 for (int i = 0; i < msgs.Count; i++)
                 {
-                    DiscordMessage m = msgs[i];
+                    IMessage m = msgs[i];
                     if (usrId != 0 && m.Author.Id != usrId) continue;
                     lang = GetBestMatch(m.Content, out _, out _, out _, out _, out _, out _);
                     if (lang != Langs.NONE)
@@ -252,7 +256,7 @@ namespace UPBot
                 }
                 if (msg == null)
                 {
-                    await ctx.CreateResponseAsync("Cannot find something that looks like code.");
+                    await RespondAsync("Cannot find something that looks like code.");
                     return;
                 }
 
@@ -277,45 +281,44 @@ namespace UPBot
 
                 if (code.Length < 1990)
                 { // Single message
-                    await ctx.CreateResponseAsync(code);
-                    DiscordMessage replacement = await ctx.GetOriginalResponseAsync();
+                    await RespondAsync(code);
+                    IUserMessage replacement = await GetOriginalResponseAsync();
                     try
                     {
-                        await replacement.CreateReactionAsync(Utils.GetEmoji(EmojiEnum.AutoRefactored));
-                        await replacement.CreateReactionAsync(Utils.GetEmoji(langEmoji));
+                        await replacement.AddReactionAsync(Utils.GetEmoji(EmojiEnum.AutoRefactored));
+                        await replacement.AddReactionAsync(Utils.GetEmoji(langEmoji));
                     }
                     catch (Exception e)
                     {
-                        Utils.Log("Cannot add an emoji: " + e.Message, ctx.Guild.Name);
+                        Utils.Log("Cannot add an emoji: " + e.Message, Context.Guild.Name);
                     }
                 }
                 else
                 { // Split in multiple messages
-                    await ctx.DeferAsync();
-                    await ctx.CreateResponseAsync(InteractionResponseType.DeferredChannelMessageWithSource);
+                    await DeferAsync();
                     while (code.Length > 1995)
                     {
                         int newlinePos = code.LastIndexOf('\n', 1995);
                         string codepart = code[..newlinePos].Trim(' ', '\t', '\r', '\n') + "\n```";
                         code = "```" + lmd + "\n" + code[(newlinePos + 1)..].Trim('\r', '\n');
-                        await ctx.EditResponseAsync(new DiscordWebhookBuilder().WithContent(codepart));
+                        await ModifyOriginalResponseAsync(m => m.Content = codepart);
                     }
                     // Post the last part as is
-                    await ctx.EditResponseAsync(new DiscordWebhookBuilder().WithContent(code));
-                    DiscordMessage replacement = await ctx.GetOriginalResponseAsync();
+                    await ModifyOriginalResponseAsync(m => m.Content = code);
+                    IUserMessage replacement = await GetOriginalResponseAsync();
                     try
                     {
-                        await replacement.CreateReactionAsync(Utils.GetEmoji(EmojiEnum.AutoRefactored));
-                        await replacement.CreateReactionAsync(Utils.GetEmoji(langEmoji));
+                        await replacement.AddReactionAsync(Utils.GetEmoji(EmojiEnum.AutoRefactored));
+                        await replacement.AddReactionAsync(Utils.GetEmoji(langEmoji));
                     }
                     catch (Exception e)
                     {
-                        Utils.Log("Cannot add an emoji: " + e.Message, ctx.Guild.Name);
+                        Utils.Log("Cannot add an emoji: " + e.Message, Context.Guild.Name);
                     }
                 }
 
                 // If we are not an admin, and the message is not from ourselves, do not accept the replace option.
-                if (Configs.HasAdminRole(ctx.Guild.Id, ctx.Member.Roles, false) || msg.Author.Id != ctx.Member.Id)
+                if (Configs.HasAdminRole(Context.Guild.Id, ((SocketGuildUser)Context.User).Roles, false) || msg.Author.Id != Context.User.Id)
                 {
                     await msg.DeleteAsync();
                 }
@@ -323,7 +326,7 @@ namespace UPBot
             }
             catch (Exception ex)
             {
-                await ctx.CreateResponseAsync(Utils.GenerateErrorAnswer(ctx.Guild.Name, "Refactor", ex));
+                await RespondAsync(embed: Utils.GenerateErrorAnswer(Context.Guild.Name, "Refactor", ex));
             }
         }
 
@@ -614,21 +617,22 @@ namespace UPBot
 
 
         [SlashCommand("addlinenumbers", "Grabs a some and adds line numbers before")]
-        public async Task AddLineNumbers(InteractionContext ctx, [Option("Member", "The user that posted the code")] DiscordUser user = null)
+        public async Task AddLineNumbers([Summary("member", "The user that posted the code")] IUser user = null)
         {
             // Checks the language of some code posted
-            Utils.LogUserCommand(ctx);
+            Utils.LogUserCommand(Context);
 
             try
             {
                 // Get last post that looks like code
-                DiscordMessage msg = null;
+                IMessage msg = null;
                 Langs lang = Langs.NONE;
                 ulong usrId = user == null ? 0 : user.Id;
-                IReadOnlyList<DiscordMessage> msgs = await ctx.Channel.GetMessagesAsync(50);
+                ITextChannel channel = Context.Channel as ITextChannel;
+                var msgs = (await channel.GetMessagesAsync(50).FlattenAsync()).ToList();
                 for (int i = 0; i < msgs.Count; i++)
                 {
-                    DiscordMessage m = msgs[i];
+                    IMessage m = msgs[i];
                     if (usrId != 0 && m.Author.Id != usrId) continue;
                     lang = GetBestMatch(m.Content, out _, out _, out _, out _, out _, out _);
                     if (lang != Langs.NONE)
@@ -639,7 +643,7 @@ namespace UPBot
                 }
                 if (msg == null)
                 {
-                    await ctx.CreateResponseAsync("Cannot find something that looks like code.");
+                    await RespondAsync("Cannot find something that looks like code.");
                     return;
                 }
 
@@ -669,15 +673,15 @@ namespace UPBot
 
                 if (code.Length < 1990)
                 { // Single message
-                    await ctx.CreateResponseAsync(code);
-                    DiscordMessage replacement = await ctx.GetOriginalResponseAsync();
+                    await RespondAsync(code);
+                    IUserMessage replacement = await GetOriginalResponseAsync();
                     try
                     {
-                        await replacement.CreateReactionAsync(Utils.GetEmoji(EmojiEnum.AutoRefactored));
+                        await replacement.AddReactionAsync(Utils.GetEmoji(EmojiEnum.AutoRefactored));
                     }
                     catch (Exception e)
                     {
-                        Utils.Log("Cannot add an emoji: " + e.Message, ctx.Guild.Name);
+                        Utils.Log("Cannot add an emoji: " + e.Message, Context.Guild.Name);
                     }
                 }
                 else
@@ -691,29 +695,29 @@ namespace UPBot
                         if (first)
                         {
                             first = false;
-                            await ctx.CreateResponseAsync(codepart);
+                            await RespondAsync(codepart);
                         }
                         else
                         {
-                            await ctx.Channel.SendMessageAsync(codepart);
+                            await channel.SendMessageAsync(codepart);
                         }
                     }
                     // Post the last part as is
-                    DiscordMessage replacement = await ctx.Channel.SendMessageAsync(code);
+                    IUserMessage replacement = await channel.SendMessageAsync(code);
                     try
                     {
-                        await replacement.CreateReactionAsync(Utils.GetEmoji(EmojiEnum.AutoRefactored));
+                        await replacement.AddReactionAsync(Utils.GetEmoji(EmojiEnum.AutoRefactored));
                     }
                     catch (Exception e)
                     {
-                        Utils.Log("Cannot add an emoji: " + e.Message, ctx.Guild.Name);
+                        Utils.Log("Cannot add an emoji: " + e.Message, Context.Guild.Name);
                     }
                 }
 
             }
             catch (Exception ex)
             {
-                await ctx.CreateResponseAsync(Utils.GenerateErrorAnswer(ctx.Guild.Name, "AddLineNumbers", ex));
+                await RespondAsync(embed: Utils.GenerateErrorAnswer(Context.Guild.Name, "AddLineNumbers", ex));
             }
         }
 

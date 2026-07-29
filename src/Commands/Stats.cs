@@ -1,5 +1,6 @@
-﻿using DSharpPlus.Entities;
-using DSharpPlus.SlashCommands;
+﻿using Discord;
+using Discord.Interactions;
+using Discord.WebSocket;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -10,7 +11,7 @@ using UPBot.UPBot_Code;
 /// Provide some server stats
 /// author: CPU
 /// </summary>
-public class SlashStats : ApplicationCommandModule
+public class SlashStats : InteractionModuleBase<SocketInteractionContext>
 {
 
     /*
@@ -31,111 +32,112 @@ public class SlashStats : ApplicationCommandModule
 
     public enum StatsTypes
     {
-        [ChoiceName("Only server")] OnlyServer,
-        [ChoiceName("Roles")] Roles,
-        [ChoiceName("Mentions")] Mentions,
-        [ChoiceName("Emojis")] Emojis,
-        [ChoiceName("All stats")] AllStats
+        [ChoiceDisplay("Only server")] OnlyServer,
+        [ChoiceDisplay("Roles")] Roles,
+        [ChoiceDisplay("Mentions")] Mentions,
+        [ChoiceDisplay("Emojis")] Emojis,
+        [ChoiceDisplay("All stats")] AllStats
     }
 
 
     [SlashCommand("stats", "Provides server stats, including detailed stats for roles, mentions, and emojis when specified")]
-    public static async Task StatsCommand(InteractionContext ctx, [Option("what", "What type of stats to show")] StatsTypes? what)
+    public async Task StatsCommand([Summary("what", "What type of stats to show")] StatsTypes? what)
     {
-        Utils.LogUserCommand(ctx);
+        Utils.LogUserCommand(Context);
 
         try
         {
             if (what == null || what == StatsTypes.OnlyServer)
             {
-                await ctx.CreateResponseAsync(GenerateStatsEmbed(ctx));
+                await RespondAsync(embed: GenerateStatsEmbed().Build());
 
             }
             else if (what == StatsTypes.AllStats)
             {
-                await ctx.CreateResponseAsync(GenerateStatsEmbed(ctx));
+                await RespondAsync(embed: GenerateStatsEmbed().Build());
 
-                DiscordMessage fup = await ctx.FollowUpAsync(new DiscordFollowupMessageBuilder().WithContent("Calculating emojis stats..."));
-                await ctx.FollowUpAsync(new DiscordFollowupMessageBuilder().WithContent(CalculateEmojis(ctx).Result));
-                await ctx.DeleteFollowupAsync(fup.Id);
+                var fup = await FollowupAsync("Calculating emojis stats...");
+                await FollowupAsync(await CalculateEmojis());
+                await fup.DeleteAsync();
 
-                fup = await ctx.FollowUpAsync(new DiscordFollowupMessageBuilder().WithContent("Calculating mentions stats..."));
-                await ctx.FollowUpAsync(new DiscordFollowupMessageBuilder().WithContent(CalculateUserMentions(ctx).Result));
-                await ctx.DeleteFollowupAsync(fup.Id);
+                fup = await FollowupAsync("Calculating mentions stats...");
+                await FollowupAsync(await CalculateUserMentions());
+                await fup.DeleteAsync();
 
-                fup = await ctx.FollowUpAsync(new DiscordFollowupMessageBuilder().WithContent("Calculating roles stats..."));
-                await ctx.FollowUpAsync(new DiscordFollowupMessageBuilder().WithContent(CalculateRoleMentions(ctx).Result));
-                await ctx.DeleteFollowupAsync(fup.Id);
+                fup = await FollowupAsync("Calculating roles stats...");
+                await FollowupAsync(await CalculateRoleMentions());
+                await fup.DeleteAsync();
 
             }
             else if (what == StatsTypes.Emojis)
             {
-                await ctx.CreateResponseAsync(GenerateStatsEmbed(ctx));
-                DiscordMessage fup = await ctx.FollowUpAsync(new DiscordFollowupMessageBuilder().WithContent("Calculating emojis stats..."));
-                await ctx.DeleteFollowupAsync(fup.Id);
-                await ctx.FollowUpAsync(new DiscordFollowupMessageBuilder().WithContent(CalculateEmojis(ctx).Result));
+                await RespondAsync(embed: GenerateStatsEmbed().Build());
+                var fup = await FollowupAsync("Calculating emojis stats...");
+                await fup.DeleteAsync();
+                await FollowupAsync(await CalculateEmojis());
 
             }
             else if (what == StatsTypes.Mentions)
             {
-                await ctx.CreateResponseAsync(GenerateStatsEmbed(ctx));
-                DiscordMessage fup = await ctx.FollowUpAsync(new DiscordFollowupMessageBuilder().WithContent("Calculating mentions stats..."));
-                await ctx.DeleteFollowupAsync(fup.Id);
-                await ctx.FollowUpAsync(new DiscordFollowupMessageBuilder().WithContent(CalculateUserMentions(ctx).Result));
+                await RespondAsync(embed: GenerateStatsEmbed().Build());
+                var fup = await FollowupAsync("Calculating mentions stats...");
+                await fup.DeleteAsync();
+                await FollowupAsync(await CalculateUserMentions());
 
             }
             else if (what == StatsTypes.Roles)
             {
-                await ctx.CreateResponseAsync(GenerateStatsEmbed(ctx));
-                DiscordMessage fup = await ctx.FollowUpAsync(new DiscordFollowupMessageBuilder().WithContent("Calculating roles stats..."));
-                await ctx.DeleteFollowupAsync(fup.Id);
-                await ctx.FollowUpAsync(new DiscordFollowupMessageBuilder().WithContent(CalculateRoleMentions(ctx).Result));
+                await RespondAsync(embed: GenerateStatsEmbed().Build());
+                var fup = await FollowupAsync("Calculating roles stats...");
+                await fup.DeleteAsync();
+                await FollowupAsync(await CalculateRoleMentions());
             }
 
         }
         catch (Exception ex)
         {
-            await ctx.CreateResponseAsync(Utils.GenerateErrorAnswer(ctx.Guild.Name, "Stats", ex));
+            await RespondAsync(embed: Utils.GenerateErrorAnswer(Context.Guild.Name, "Stats", ex));
         }
     }
 
 
-    private static DiscordEmbedBuilder GenerateStatsEmbed(InteractionContext ctx)
+    private EmbedBuilder GenerateStatsEmbed()
     {
-        DiscordEmbedBuilder e = new();
-        DiscordGuild g = ctx.Guild;
+        EmbedBuilder e = new();
+        SocketGuild g = Context.Guild;
 
         e.Description = " ----  ---- Stats ----  ---- \n_" + g.Description + "_";
 
-        int? m1 = g.ApproximateMemberCount;
+        // Discord.Net's SocketGuild doesn't surface the REST "approximate member/presence
+        // count" fields DSharpPlus exposed (those come from the with_counts guild preview,
+        // not the gateway cache), so we fall back to the live gateway member count only.
         int m2 = g.MemberCount;
         int? m3 = g.MaxMembers;
-        string members = (m1 == null) ? m2.ToString() : (m1 + "/" + m2 + "/" + m3 + "max");
-        e.AddField("Members", members + (g.IsLarge ? " (large)" : ""), true);
-        int? p1 = g.ApproximatePresenceCount;
-        int? p2 = g.MaxPresences;
-        if (p1 != null) e.AddField("Presence", p1.ToString() + (p2 != null ? "/" + p2 : ""), true);
+        string members = m2 + (m3 != null ? "/" + m3 + "max" : "");
+        bool isLarge = g.MemberCount >= 250; // Discord's own "large guild" threshold
+        e.AddField("Members", members + (isLarge ? " (large)" : ""), true);
         int? s1 = g.PremiumSubscriptionCount;
         if (s1 != null) e.AddField("Boosters", s1.ToString(), true);
 
-        double days = (DateTime.Now - g.CreationTimestamp.UtcDateTime).TotalDays;
+        double days = (DateTime.Now - g.CreatedAt.UtcDateTime).TotalDays;
         e.AddField("Server created", (int)days + " days ago", true);
         double dailyms = m2 / days;
         e.AddField("Daily members", dailyms.ToString("N1") + " members per day", true);
 
         e.WithTitle("Stats for " + g.Name);
-        e.WithThumbnail(g.IconUrl);
+        e.WithThumbnailUrl(g.IconUrl);
         e.WithImageUrl(g.BannerUrl);
 
         int numtc = 0, numvc = 0, numnc = 0;
-        foreach (var c in g.Channels.Values)
+        foreach (var c in g.Channels)
         {
-            if (c.Bitrate != null && c.Bitrate != 0) numvc++;
-            else if (c.IsNSFW) numnc++;
+            if (c is SocketVoiceChannel) numvc++;
+            else if (c is SocketTextChannel tc && tc.IsNsfw) numnc++;
             else numtc++;
         }
 
-        if (g.IsNSFW) e.AddField("NSFW", "NSFW server\nFilter level: " + g.ExplicitContentFilter.ToString() + "\nNSFW restriction type: " + g.NsfwLevel.ToString(), true);
+        if (g.NsfwLevel == NsfwLevel.Explicit || g.NsfwLevel == NsfwLevel.AgeRestricted)
+            e.AddField("NSFW", "NSFW server\nFilter level: " + g.ExplicitContentFilter.ToString() + "\nNSFW restriction type: " + g.NsfwLevel.ToString(), true);
 
         e.AddField("Roles:", g.Roles.Count + " roles", true);
 
@@ -144,29 +146,30 @@ public class SlashStats : ApplicationCommandModule
           (g.RulesChannel == null ? "" : "\nRules channel: " + g.RulesChannel.Mention), false);
 
         string emojis;
-        if (g.Emojis.Count > 0)
+        if (g.Emotes.Count > 0)
         {
-            emojis = g.Emojis.Count + " custom emojis: ";
-            foreach (var emj in g.Emojis.Values) emojis += Utils.GetEmojiSnowflakeID(emj) + " ";
+            emojis = g.Emotes.Count + " custom emojis: ";
+            foreach (var emj in g.Emotes) emojis += Utils.GetEmojiSnowflakeID(emj) + " ";
             e.AddField("Emojis:", emojis, true);
         }
         return e;
     }
 
-    private static async Task<string> CalculateEmojis(InteractionContext ctx)
+    private async Task<string> CalculateEmojis()
     {
         Dictionary<string, int> count = [];
 
-        var msgs = await ctx.Channel.GetMessagesAsync(1000);
+        ITextChannel channel = Context.Channel as ITextChannel;
+        var msgs = await channel.GetMessagesAsync(1000).FlattenAsync();
         foreach (var m in msgs)
         {
             var emjs = m.Reactions;
             foreach (var r in emjs)
             {
-                string snowflake = Utils.GetEmojiSnowflakeID(r.Emoji);
+                string snowflake = Utils.GetEmojiSnowflakeID(r.Key);
                 if (snowflake == null) continue;
-                if (count.ContainsKey(snowflake)) count[snowflake] += r.Count;
-                else count[snowflake] = r.Count;
+                if (count.ContainsKey(snowflake)) count[snowflake] += r.Value.ReactionCount;
+                else count[snowflake] = r.Value.ReactionCount;
             }
         }
         List<KeyValuePair<string, int>> list = [];
@@ -182,18 +185,20 @@ public class SlashStats : ApplicationCommandModule
         return res;
     }
 
-    private static async Task<string> CalculateUserMentions(InteractionContext ctx)
+    private async Task<string> CalculateUserMentions()
     {
         Dictionary<string, int> count = [];
         Dictionary<ulong, int> askers = [];
-        var msgs = await ctx.Channel.GetMessagesAsync(1000);
+        ITextChannel channel = Context.Channel as ITextChannel;
+        var msgs = await channel.GetMessagesAsync(1000).FlattenAsync();
 
         foreach (var m in msgs)
         {
-            var mens = m.MentionedUsers;
-            foreach (var r in mens)
+            var mens = m.MentionedUserIds;
+            foreach (var rid in mens)
             {
-                string snowflake = r.Username;
+                SocketGuildUser ru = Context.Guild.GetUser(rid);
+                string snowflake = ru?.Username;
                 if (snowflake == null) continue;
                 snowflake = snowflake.Replace("_", "\\_");
                 count[snowflake] = count.TryGetValue(snowflake, out int currentCount) ? currentCount + 1 : 1;
@@ -210,7 +215,7 @@ public class SlashStats : ApplicationCommandModule
         {
             try
             {
-                DiscordMember member = await ctx.Guild.GetMemberAsync(askerId);
+                SocketGuildUser member = Context.Guild.GetUser(askerId);
                 if (member != null)
                 {
                     sortedAskers.Add(new KeyValuePair<string, int>(member.Username, askers[askerId]));
@@ -242,18 +247,20 @@ public class SlashStats : ApplicationCommandModule
         return res;
     }
 
-    private static async Task<string> CalculateRoleMentions(InteractionContext ctx)
+    private async Task<string> CalculateRoleMentions()
     {
         Dictionary<string, int> count = [];
         Dictionary<ulong, int> askers = [];
-        var msgs = await ctx.Channel.GetMessagesAsync(1000);
+        ITextChannel channel = Context.Channel as ITextChannel;
+        var msgs = await channel.GetMessagesAsync(1000).FlattenAsync();
 
         foreach (var m in msgs)
         {
-            var mens = m.MentionedRoles;
-            foreach (var r in mens)
+            var mens = m.MentionedRoleIds;
+            foreach (var rid in mens)
             {
-                string snowflake = r.Name;
+                SocketRole role = Context.Guild.GetRole(rid);
+                string snowflake = role?.Name;
                 if (snowflake == null) continue;
                 snowflake = snowflake.Replace("_", "\\_");
                 count[snowflake] = count.TryGetValue(snowflake, out int currentCount) ? currentCount + 1 : 1;
@@ -270,7 +277,7 @@ public class SlashStats : ApplicationCommandModule
         {
             try
             {
-                DiscordMember member = await ctx.Guild.GetMemberAsync(askerId);
+                SocketGuildUser member = Context.Guild.GetUser(askerId);
                 if (member != null)
                 {
                     sortedAskers.Add(new KeyValuePair<string, int>(member.Username, askers[askerId]));

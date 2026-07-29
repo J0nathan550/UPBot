@@ -1,5 +1,5 @@
-﻿using DSharpPlus.Entities;
-using DSharpPlus.SlashCommands;
+﻿using Discord;
+using Discord.Interactions;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
@@ -16,10 +16,10 @@ namespace UPBot
     /// Information can be false from time to time, but it works. 
     /// Author: J0nathan550
     /// </summary>
-    public class Weather : ApplicationCommandModule
+    public class Weather : InteractionModuleBase<SocketInteractionContext>
     {
         [SlashCommand("weather", "Get weather information from any city")]
-        public static async Task WeatherCommand(InteractionContext ctx, [Option("city", "Weather about the city")] string city = null)
+        public async Task WeatherCommand([Summary("city", "Weather about the city")] string city = null)
         {
             try
             {
@@ -27,23 +27,23 @@ namespace UPBot
                 if (string.IsNullOrWhiteSpace(Configs.WeatherAPIKey))
                 {
                     Utils.Log($"Weather API Key is not defined", null);
-                    await ctx.CreateResponseAsync(Utils.GenerateErrorAnswer(ctx.Guild.Name, "Weather", "Weather API Key is not specified"));
+                    await RespondAsync(embed: Utils.GenerateErrorAnswer(Context.Guild.Name, "Weather", "Weather API Key is not specified"));
                     return;
                 }
 
 
                 if (city == null)
                 {
-                    DiscordEmbedBuilder discordEmbed = new()
+                    EmbedBuilder discordEmbed = new()
                     {
                         Title = "Error!",
                         Description = "Looks like you typed a wrong city, or you typed nothing.",
-                        Color = DiscordColor.Red
+                        Color = Color.Red
                     };
-                    await ctx.CreateResponseAsync(discordEmbed.Build());
+                    await RespondAsync(embed: discordEmbed.Build());
                     return;
                 }
-                Utils.Log($"Weather executed by {ctx.User} command: Trying to get information from city: {city}", null);
+                Utils.Log($"Weather executed by {Context.User} command: Trying to get information from city: {city}", null);
 
                 using HttpClient response = new();
                 string json;
@@ -53,39 +53,36 @@ namespace UPBot
                 }
                 catch (Exception ex)
                 {
-                    await ctx.CreateResponseAsync($"Double check if the city _{city}_ is correct.");
+                    await RespondAsync($"Double check if the city _{city}_ is correct.");
                     return;
                 }
                 WeatherData data = JsonConvert.DeserializeObject<WeatherData>(json);
 
                 if (data == null)
                 {
-                    DiscordEmbedBuilder discordEmbed = new()
+                    EmbedBuilder discordEmbed = new()
                     {
                         Title = "Error!",
                         Description = "There was a problem in getting weather information, try again.",
-                        Color = DiscordColor.Red
+                        Color = Color.Red
                     };
-                    await ctx.CreateResponseAsync(discordEmbed.Build());
+                    await RespondAsync(embed: discordEmbed.Build());
                     return;
                 }
 
-                DiscordColor orangeColor = new("#fc7f03");
+                Color orangeColor = new(Convert.ToUInt32("fc7f03", 16));
 
-                DiscordEmbedBuilder discordEmbedBuilder = new()
+                EmbedBuilder discordEmbedBuilder = new()
                 {
                     Title = $"Weather information - {city}",
                     Timestamp = DateTime.Parse(data.current.LastUpdated),
                     Color = orangeColor,
-                    Footer = new DiscordEmbedBuilder.EmbedFooter()
+                    Footer = new EmbedFooterBuilder()
                     {
                         Text = "Last weather update: ",
                         IconUrl = "https://media.discordapp.net/attachments/1137667651326447726/1137668268426002452/cloudy.png"
                     },
-                    Thumbnail = new DiscordEmbedBuilder.EmbedThumbnail()
-                    {
-                        Url = $"https:{data.current.Condition.Icon}"
-                    },
+                    ThumbnailUrl = $"https:{data.current.Condition.Icon}",
                 };
 
                 discordEmbedBuilder.AddField(":cityscape: City", $"{data.location.Name}", true);
@@ -140,18 +137,18 @@ namespace UPBot
                     $"Moon illumination: {data.forecast.Forecastday[0].Astro.MoonIllumination}         :bulb:\n" +
                     $"Is moon up?: {(data.forecast.Forecastday[0].Astro.IsMoonUp == 1 ? "Yes" : "No")} :full_moon:\n" +
                     $"Is sun up?: {(data.forecast.Forecastday[0].Astro.IsSunUp == 1 ? "Yes" : "No")}   :sunny:", false);
-                await ctx.CreateResponseAsync(discordEmbedBuilder.Build());
+                await RespondAsync(embed: discordEmbedBuilder.Build());
             }
             catch (Exception ex)
             {
                 Utils.Log($"Weather error command:\nMessage: {ex.Message}\nStacktrace:{ex.StackTrace}", null);
-                DiscordEmbedBuilder discordEmbed = new()
+                EmbedBuilder discordEmbed = new()
                 {
                     Title = "Error!",
                     Description = $"There was a fatal error in executing weather command.\nMessage: {ex.Message}\nStacktrace: {ex.StackTrace}",
-                    Color = DiscordColor.Red
+                    Color = Color.Red
                 };
-                await ctx.CreateResponseAsync(discordEmbed.Build());
+                await RespondAsync(embed: discordEmbed.Build());
             }
         }
     }

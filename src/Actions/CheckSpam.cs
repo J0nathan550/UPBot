@@ -1,6 +1,5 @@
-using DSharpPlus;
-using DSharpPlus.Entities;
-using DSharpPlus.EventArgs;
+using Discord;
+using Discord.WebSocket;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -23,7 +22,7 @@ using UPBot.UPBot_Code;
 ///    SpamProtection / SpamLink rows (managed via /setup) instead of being global.
 ///
 /// Everything else (thresholds, scoring, ordering of side effects, DM/log content)
-/// mirrors the original bot as closely as DSharpPlus allows.
+/// mirrors the original bot as closely as Discord.Net allows.
 /// </summary>
 namespace UPBot
 {
@@ -36,7 +35,7 @@ namespace UPBot
 
         private static readonly HttpClient httpClient = new() { Timeout = TimeSpan.FromSeconds(10) };
 
-        public static DiscordUser SpamCheckTimeout;
+        public static IUser SpamCheckTimeout;
 
         private const int TIMEOUT_THRESHOLD = 3;
         private const int SAME_CHANNEL_SPAM_THRESHOLD = 3;
@@ -83,17 +82,19 @@ namespace UPBot
             public List<string> ImageUrls { get; set; } = [];
         }
 
-        internal static async Task CheckMessageUpdate(DiscordClient _, MessageUpdateEventArgs args)
+        internal static async Task CheckMessageUpdate(Cacheable<IMessage, ulong> _, SocketMessage message, ISocketMessageChannel channel)
         {
-            await CheckMessage(args.Guild, args.Author, args.Message);
+            SocketGuild guild = (channel as SocketTextChannel)?.Guild;
+            await CheckMessage(guild, message.Author, message);
         }
 
-        internal static async Task CheckMessageCreate(DiscordClient _, MessageCreateEventArgs args)
+        internal static async Task CheckMessageCreate(SocketMessage message)
         {
-            await CheckMessage(args.Guild, args.Author, args.Message);
+            SocketGuild guild = (message.Channel as SocketTextChannel)?.Guild;
+            await CheckMessage(guild, message.Author, message);
         }
 
-        private static async Task CheckMessage(DiscordGuild guild, DiscordUser author, DiscordMessage message)
+        private static async Task CheckMessage(SocketGuild guild, IUser author, SocketMessage message)
         {
             if (guild == null || author == null || message == null || author.Id == Configs.BotId)
                 return;
@@ -105,18 +106,14 @@ namespace UPBot
                 return;
             }
 
-            DiscordMember authorMember;
-            try
+            SocketGuildUser authorMember = author as SocketGuildUser ?? guild.GetUser(author.Id);
+            if (authorMember == null)
             {
-                authorMember = await guild.GetMemberAsync(author.Id);
-            }
-            catch (Exception ex)
-            {
-                Utils.Log("Unable to resolve guild member for spam check: " + ex.Message, guild.Name);
+                Utils.Log("Unable to resolve guild member for spam check.", guild.Name);
                 return;
             }
 
-            if (authorMember == null || authorMember.IsBot)
+            if (authorMember.IsBot)
                 return;
 
             try
@@ -226,7 +223,7 @@ namespace UPBot
                 {
                     try
                     {
-                        await message.DeleteAsync("Duplicate content detected");
+                        await message.DeleteAsync(new RequestOptions { AuditLogReason = "Duplicate content detected" });
                     }
                     catch (Exception ex)
                     {
@@ -242,17 +239,17 @@ namespace UPBot
             }
             catch (Exception ex)
             {
-                if (ex is DSharpPlus.Exceptions.NotFoundException) return;
+                if (ex is Discord.Net.HttpException httpEx && httpEx.HttpCode == System.Net.HttpStatusCode.NotFound) return;
                 await ReportErrorToModChannel(guild, "CheckSpam.CheckMessage", ex);
             }
         }
 
-        private static async Task ReportErrorToModChannel(DiscordGuild guild, string context, Exception ex)
+        private static async Task ReportErrorToModChannel(SocketGuild guild, string context, Exception ex)
         {
             try
             {
                 if (Configs.TrackChannels.TryGetValue(guild.Id, out TrackChannel trackChannel) && trackChannel?.channel != null)
-                    await trackChannel.channel.SendMessageAsync(Utils.GenerateErrorAnswer(guild.Name, context, ex));
+                    await trackChannel.channel.SendMessageAsync(embed: Utils.GenerateErrorAnswer(guild.Name, context, ex));
                 else
                     Utils.Log($"[ERROR] {context}: {ex.Message} (no mod/log channel configured to report to)", guild.Name);
             }
@@ -262,7 +259,7 @@ namespace UPBot
             }
         }
 
-        private static async Task<bool> CheckCustomLinkModeration(DiscordGuild guild, DiscordMember authorMember, DiscordMessage message, string content)
+        private static async Task<bool> CheckCustomLinkModeration(SocketGuild guild, SocketGuildUser authorMember, SocketMessage message, string content)
         {
             foreach (Match m in linkRE.Matches(content.ToLowerInvariant()))
             {
@@ -291,7 +288,7 @@ namespace UPBot
         }
 
         private static async Task<bool> CheckSingleMessageImageSpam(
-            DiscordGuild guild, DiscordMember authorMember, DiscordMessage message,
+            SocketGuild guild, SocketGuildUser authorMember, SocketMessage message,
             string content, int imageCount, List<string> imageUrls, (ulong Guild, ulong User) key)
         {
             if (imageCount < SUSPICIOUS_IMAGE_COUNT)
@@ -374,18 +371,18 @@ namespace UPBot
                 spamTracker[key] = filtered;
         }
 
-        private static int GetImageCount(DiscordMessage message)
+        private static int GetImageCount(SocketMessage message)
         {
             int count = message.Attachments.Count;
             foreach (var embed in message.Embeds)
             {
-                if (embed.Image != null && !string.IsNullOrWhiteSpace(embed.Image.ToString())) count++;
-                if (embed.Thumbnail != null && !string.IsNullOrWhiteSpace(embed.Thumbnail.ToString())) count++;
+                if (embed.Image != null && !string.IsNullOrWhiteSpace(embed.Image.Value.Url)) count++;
+                if (embed.Thumbnail != null && !string.IsNullOrWhiteSpace(embed.Thumbnail.Value.Url)) count++;
             }
             return count;
         }
 
-        private static List<string> GetImageUrls(DiscordMessage message)
+        private static List<string> GetImageUrls(SocketMessage message)
         {
             List<string> urls = [];
             foreach (var attachment in message.Attachments)
@@ -396,10 +393,10 @@ namespace UPBot
 
             foreach (var embed in message.Embeds)
             {
-                if (embed.Image != null && !string.IsNullOrWhiteSpace(embed.Image.ToString()))
-                    urls.Add(embed.Image.ToString());
-                if (embed.Thumbnail != null && !string.IsNullOrWhiteSpace(embed.Thumbnail.ToString()))
-                    urls.Add(embed.Thumbnail.ToString());
+                if (embed.Image != null && !string.IsNullOrWhiteSpace(embed.Image.Value.Url))
+                    urls.Add(embed.Image.Value.Url);
+                if (embed.Thumbnail != null && !string.IsNullOrWhiteSpace(embed.Thumbnail.Value.Url))
+                    urls.Add(embed.Thumbnail.Value.Url);
             }
 
             return urls;
@@ -413,7 +410,7 @@ namespace UPBot
         /// original message to still exist to link/forward it.
         /// </summary>
         private static async Task TimeoutAndDelete(
-            DiscordGuild guild, DiscordMember authorMember, DiscordMessage message,
+            SocketGuild guild, SocketGuildUser authorMember, SocketMessage message,
             string actionType, string reason, TimeSpan duration,
             bool deleteThisMessage, List<string> imageUrls)
         {
@@ -425,7 +422,7 @@ namespace UPBot
             {
                 try
                 {
-                    await message.DeleteAsync(reason);
+                    await message.DeleteAsync(new RequestOptions { AuditLogReason = reason });
                 }
                 catch (Exception ex)
                 {
@@ -445,7 +442,7 @@ namespace UPBot
         /// channels - mirrors SpamModerator's "warning only" image-spam branch.
         /// </summary>
         private static async Task WarnAndDelete(
-            DiscordGuild guild, DiscordMember authorMember, DiscordMessage message,
+            SocketGuild guild, SocketGuildUser authorMember, SocketMessage message,
             string actionType, string reason, string content, int imageCount, List<string> imageUrls)
         {
             await LogAction(guild, authorMember, actionType, reason, "None (warning only)", content, imageCount, imageUrls, message);
@@ -453,7 +450,7 @@ namespace UPBot
 
             try
             {
-                await message.DeleteAsync(reason);
+                await message.DeleteAsync(new RequestOptions { AuditLogReason = reason });
             }
             catch (Exception ex)
             {
@@ -463,11 +460,11 @@ namespace UPBot
             Utils.Log($"[SPAM] Warned and deleted message from {authorMember.Username}: {reason}", guild.Name);
         }
 
-        private static async Task TimeoutUser(DiscordGuild guild, DiscordMember user, TimeSpan duration, string reason)
+        private static async Task TimeoutUser(SocketGuild guild, SocketGuildUser user, TimeSpan duration, string reason)
         {
             try
             {
-                await user.TimeoutAsync(DateTimeOffset.Now + duration, reason);
+                await user.SetTimeOutAsync(duration, new RequestOptions { AuditLogReason = reason });
                 Utils.Log($"[TIMEOUT] Timed out {user.Username} ({user.Id}) for {duration.TotalMinutes:0} min — {reason}", guild.Name);
             }
             catch (Exception ex)
@@ -476,14 +473,14 @@ namespace UPBot
             }
         }
 
-        private static async Task SendDmNotification(DiscordMember user, string guildName, string reason, string duration)
+        private static async Task SendDmNotification(SocketGuildUser user, string guildName, string reason, string duration)
         {
             try
             {
-                var dm = await user.CreateDmChannelAsync();
+                var dm = await user.CreateDMChannelAsync();
                 if (dm == null) return;
 
-                var eb = new DiscordEmbedBuilder()
+                var eb = new EmbedBuilder()
                     .WithTitle("⚠️ Action Taken on Your Account")
                     .WithColor(Utils.Red)
                     .WithTimestamp(DateTimeOffset.UtcNow)
@@ -495,7 +492,7 @@ namespace UPBot
                 eb.AddField("Reason", reason, false);
                 eb.WithFooter("If you believe this is a mistake, please contact the server admins.");
 
-                await dm.SendMessageAsync(eb.Build());
+                await dm.SendMessageAsync(embed: eb.Build());
                 Utils.Log($"[DM] Sent notification to {user.Username}", guildName);
             }
             catch (Exception ex)
@@ -504,19 +501,19 @@ namespace UPBot
             }
         }
 
-        private static async Task DeleteAllRecentMessages(DiscordGuild guild, ulong userId)
+        private static async Task DeleteAllRecentMessages(SocketGuild guild, ulong userId)
         {
             int deletedCount = 0;
             DateTime cutoff = DateTime.UtcNow.AddMinutes(-TIME_WINDOW_MINUTES);
 
-            foreach (var channel in guild.Channels.Values)
+            foreach (var channel in guild.Channels)
             {
-                if (channel.Type != ChannelType.Text)
+                if (channel is not SocketTextChannel textChannel)
                     continue;
 
                 try
                 {
-                    var messages = await channel.GetMessagesAsync(100);
+                    var messages = (await textChannel.GetMessagesAsync(100).FlattenAsync()).ToList();
                     foreach (var msg in messages.Where(m => m.Author != null && m.Author.Id == userId && m.Timestamp.UtcDateTime > cutoff))
                     {
                         try { await msg.DeleteAsync(); deletedCount++; }
@@ -558,8 +555,8 @@ namespace UPBot
         }
 
         private static async Task LogAction(
-            DiscordGuild guild, DiscordMember user, string actionType, string reason, string duration,
-            string messageContent, int imageCount, List<string> imageUrls, DiscordMessage originalMessage)
+            SocketGuild guild, SocketGuildUser user, string actionType, string reason, string duration,
+            string messageContent, int imageCount, List<string> imageUrls, SocketMessage originalMessage)
         {
             try
             {
@@ -569,9 +566,9 @@ namespace UPBot
                     return;
                 }
 
-                DiscordChannel logChannel = trackChannel.channel;
+                SocketTextChannel logChannel = trackChannel.channel;
 
-                var eb = new DiscordEmbedBuilder()
+                var eb = new EmbedBuilder()
                     .WithTitle("🚨 Anti-Spam Action")
                     .WithColor(Utils.Red)
                     .WithTimestamp(DateTimeOffset.UtcNow)
@@ -592,7 +589,6 @@ namespace UPBot
                 if (imageCount > 0)
                     eb.AddField("Images / Attachments", imageCount.ToString(), true);
 
-                DiscordMessageBuilder mb = new DiscordMessageBuilder().AddEmbed(eb.Build());
                 List<(MemoryStream Stream, string Filename)> imageData = [];
 
                 if (imageUrls != null && imageUrls.Count > 0)
@@ -605,21 +601,27 @@ namespace UPBot
                         const int maxFiles = 10;
                         if (imageData.Count > maxFiles)
                             eb.AddField("⚠️ Truncated", $"Showing {maxFiles} of {imageData.Count} images.", false);
-
-                        mb = new DiscordMessageBuilder().AddEmbed(eb.Build());
-                        foreach (var (stream, filename) in imageData.Take(maxFiles))
-                            mb.AddFile(filename, stream);
                     }
                     else
                     {
                         eb.AddField("⚠️ Image Backup", "Images could not be downloaded (URLs may have expired).", false);
-                        mb = new DiscordMessageBuilder().AddEmbed(eb.Build());
                     }
                 }
 
                 try
                 {
-                    await logChannel.SendMessageAsync(mb);
+                    if (imageData.Count > 0)
+                    {
+                        const int maxFiles = 10;
+                        List<FileAttachment> attachments = [];
+                        foreach (var (stream, filename) in imageData.Take(maxFiles))
+                            attachments.Add(new FileAttachment(stream, filename));
+                        await logChannel.SendFilesAsync(attachments, embed: eb.Build());
+                    }
+                    else
+                    {
+                        await logChannel.SendMessageAsync(embed: eb.Build());
+                    }
                     Utils.Log($"[LOG] Sent anti-spam log with {imageData.Count} re-attached image(s) for {user.Username}.", guild.Name);
                 }
                 finally

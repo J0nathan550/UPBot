@@ -1,5 +1,5 @@
-﻿using DSharpPlus.Entities;
-using DSharpPlus.EventArgs;
+using Discord;
+using Discord.WebSocket;
 using System;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
@@ -10,7 +10,7 @@ namespace UPBot.UPBot_Code;
 
 public class TempSetRole
 {
-    public DiscordRole role;
+    public SocketRole role;
     public CancellationTokenSource cancel;
     public ulong user;
     internal ulong channel;
@@ -18,7 +18,7 @@ public class TempSetRole
     internal ulong emojiid;
     internal string emojiname;
 
-    public TempSetRole(ulong usr, DiscordRole r)
+    public TempSetRole(ulong usr, SocketRole r)
     {
         user = usr;
         role = r;
@@ -36,7 +36,7 @@ public class TempSetRole
 /// </summary>
 public class Configs
 {
-    private static readonly Dictionary<ulong, DiscordGuild> Guilds = [];
+    private static readonly Dictionary<ulong, SocketGuild> Guilds = [];
     public static readonly Dictionary<ulong, TrackChannel> TrackChannels = [];
     public static readonly Dictionary<ulong, List<ulong>> AdminRoles = [];
     public static readonly Dictionary<ulong, SpamProtection> SpamProtections = [];
@@ -70,7 +70,7 @@ public class Configs
             TempRoleSelected.Clear();
             WeatherAPIKey = null;
 
-            foreach (var g in Utils.GetClient().Guilds.Values)
+            foreach (var g in Utils.GetClient().Guilds)
             {
                 Guilds[g.Id] = g;
             }
@@ -95,7 +95,7 @@ public class Configs
                 {
                     TrackChannels[r.Guild] = r;
                     if (!Guilds.ContainsKey(r.Guild) && TryGetGuild(r.Guild) == null) continue; // Guild is missing
-                    DiscordChannel ch = Guilds[r.Guild].GetChannel(r.ChannelId);
+                    SocketTextChannel ch = Guilds[r.Guild].GetChannel(r.ChannelId) as SocketTextChannel;
                     if (ch == null)
                     {
                         Utils.Log("Missing track channel id " + r.ChannelId + " from Guild " + Guilds[r.Guild].Name, Guilds[r.Guild].Name);
@@ -179,7 +179,7 @@ public class Configs
     }
 
 
-    public static DiscordGuild TryGetGuild(ulong id)
+    public static SocketGuild TryGetGuild(ulong id)
     {
         if (Guilds.TryGetValue(id, out var guild)) return guild;
 
@@ -221,10 +221,10 @@ public class Configs
             }
         }
 
-        IReadOnlyDictionary<ulong, DiscordGuild> cguilds = Utils.GetClient().Guilds;
-        foreach (var guildId in cguilds.Keys)
+        IReadOnlyCollection<SocketGuild> cguilds = Utils.GetClient().Guilds;
+        foreach (var cg in cguilds)
         {
-            Guilds.TryAdd(guildId, cguilds[guildId]);
+            Guilds.TryAdd(cg.Id, cg);
         }
         if (Guilds.TryGetValue(id, out var getGuild)) return getGuild;
 
@@ -233,9 +233,8 @@ public class Configs
 
 
 
-    internal static Task NewGuildAdded(DSharpPlus.DiscordClient _, GuildCreateEventArgs e)
+    internal static Task NewGuildAdded(SocketGuild g)
     {
-        DiscordGuild g = e.Guild;
         ulong gid = g.Id;
         // Do we have the guild?
         if (TryGetGuild(gid) == null)
@@ -255,18 +254,18 @@ public class Configs
         return Task.FromResult(0);
     }
 
-    internal static bool IsAdminRole(ulong guild, DiscordRole role)
+    internal static bool IsAdminRole(ulong guild, SocketRole role)
     {
         if (AdminRoles[guild].Contains(role.Id)) return true;
-        return role.Permissions.HasFlag(DSharpPlus.Permissions.Administrator); // Fall back
+        return role.Permissions.Has(GuildPermission.Administrator); // Fall back
     }
-    internal static bool HasAdminRole(ulong guild, IEnumerable<DiscordRole> roles, bool withManageMessages)
+    internal static bool HasAdminRole(ulong guild, IEnumerable<SocketRole> roles, bool withManageMessages)
     {
         if (AdminRoles[guild] == null || AdminRoles[guild].Count == 0) return true;
         foreach (var r in roles)
             if (AdminRoles[guild].Contains(r.Id)) return true;
         foreach (var r in roles)
-            if (r.Permissions.HasFlag(DSharpPlus.Permissions.Administrator) || (withManageMessages && r.Permissions.HasFlag(DSharpPlus.Permissions.ManageMessages))) return true;
+            if (r.Permissions.Has(GuildPermission.Administrator) || (withManageMessages && r.Permissions.Has(GuildPermission.ManageMessages))) return true;
         return false;
     }
 
@@ -276,7 +275,7 @@ public class Configs
         string res = "";
         foreach (var rid in value)
         {
-            DiscordRole r = Guilds[gid].GetRole(rid);
+            SocketRole r = Guilds[gid].GetRole(rid);
             if (r != null) res += r.Mention + " ";
         }
         if (res.Length > 0) return res[..^1];

@@ -1,6 +1,8 @@
-﻿using DSharpPlus.Entities;
-using DSharpPlus.SlashCommands;
+﻿using Discord;
+using Discord.Interactions;
+using Discord.WebSocket;
 using System;
+using System.Linq;
 using System.Threading.Tasks;
 using UPBot.UPBot_Code;
 
@@ -11,45 +13,54 @@ using UPBot.UPBot_Code;
 /// </summary>
 /// 
 
-public class SlashWhoIs : ApplicationCommandModule
+public class SlashWhoIs : InteractionModuleBase<SocketInteractionContext>
 {
 
     [SlashCommand("whois", "Get information about a specific user (or yourself)")]
-    public static async Task WhoIsCommand(InteractionContext ctx, [Option("user", "The user to get info from")] DiscordUser user = null)
+    public async Task WhoIsCommand([Summary("user", "The user to get info from")] IUser user = null)
     {
-        Utils.LogUserCommand(ctx);
+        Utils.LogUserCommand(Context);
 
         try
         {
-            DiscordMember m;
+            SocketGuildUser invoker = Context.User as SocketGuildUser;
+            SocketGuildUser m;
 
-            m = user == null ? ctx.Member : ctx.Guild.GetMemberAsync(user.Id).Result; // If we do not have a user we use the member that invoked the command
-            bool you = m == ctx.Member;
+            m = user == null ? invoker : Context.Guild.GetUser(user.Id); // If we do not have a user we use the member that invoked the command
+            bool you = m.Id == invoker.Id;
 
-            DateTimeOffset jdate = m.JoinedAt.UtcDateTime;
+            DateTimeOffset jdate = (m.JoinedAt ?? DateTimeOffset.UtcNow).UtcDateTime;
             string joined = jdate.Year + "/" + jdate.Month + "/" + jdate.Day;
-            DateTimeOffset cdate = m.CreationTimestamp.UtcDateTime;
+            DateTimeOffset cdate = m.CreatedAt.UtcDateTime;
             string creation = cdate.Year + "/" + cdate.Month + "/" + cdate.Day;
 
-            int daysJ = (int)(DateTime.Now - m.JoinedAt.DateTime).TotalDays;
-            int daysA = (int)(DateTime.Now - m.CreationTimestamp.DateTime).TotalDays;
+            int daysJ = (int)(DateTime.Now - (m.JoinedAt ?? DateTimeOffset.UtcNow).DateTime).TotalDays;
+            int daysA = (int)(DateTime.Now - m.CreatedAt.DateTime).TotalDays;
             double years = daysA / 365.25;
+
+            // Discord.Net doesn't expose a ready-made "member color"; take the highest
+            // positioned role that actually has a non-default color, like Discord itself does.
+            Color memberColor = m.Roles
+                .Where(r => r.Color.RawValue != 0)
+                .OrderByDescending(r => r.Position)
+                .Select(r => r.Color)
+                .DefaultIfEmpty(Color.Default)
+                .First();
 
             string title = "Who is the user " + m.DisplayName + "#" + m.Discriminator;
             string description = m.Username + " joined on " + joined + " (" + daysJ + " days)\n Account created on " +
                                  creation + " (" + daysA + " days, " + years.ToString("N1") + " years)";
-            var embed = Utils.BuildEmbed(title, description, m.Color);
-            embed.WithThumbnail(m.AvatarUrl, 64, 64);
+            var embed = Utils.BuildEmbed(title, description, memberColor);
+            embed.WithThumbnailUrl(m.GetDisplayAvatarUrl() ?? m.GetDefaultAvatarUrl());
 
             embed.AddField("Is you", you ? "✓" : "❌", true);
             embed.AddField("Is a bot", m.IsBot ? "🤖" : "❌", true);
-            embed.AddField("Is the boss", m.IsOwner ? "👑" : "❌", true);
+            embed.AddField("Is the boss", m.Id == Context.Guild.OwnerId ? "👑" : "❌", true);
             embed.AddField("Is Muted", m.IsMuted ? "✓" : "❌", true);
             embed.AddField("Is Deafened", m.IsDeafened ? "✓" : "❌", true);
 
-            if (m.Locale != null) embed.AddField("Speaks", m.Locale, true);
             if (m.Nickname != null) embed.AddField("Is called", m.Nickname, true);
-            embed.AddField("Avatar Hex Color", m.Color.ToString(), true);
+            embed.AddField("Avatar Hex Color", memberColor.ToString(), true);
 
             if (m.PremiumSince != null)
             {
@@ -57,12 +68,13 @@ public class SlashWhoIs : ApplicationCommandModule
                 string booster = bdate.Year + "/" + bdate.Month + "/" + bdate.Day;
                 embed.AddField("Booster", "From " + booster, true);
             }
-            if (m.Flags != null) embed.AddField("Flags", m.Flags.ToString(), true); // Only the default flags will be shown. This bot will not be very diffused so probably we do not need specific checks for flags
+            if (m.PublicFlags != null) embed.AddField("Flags", m.PublicFlags.ToString(), true); // Only the default flags will be shown. This bot will not be very diffused so probably we do not need specific checks for flags
 
             string roles = "";
             int num = 0;
-            foreach (DiscordRole role in m.Roles)
+            foreach (SocketRole role in m.Roles)
             {
+                if (role.IsEveryone) continue;
                 roles += role.Mention + " ";
                 num++;
             }
@@ -72,30 +84,31 @@ public class SlashWhoIs : ApplicationCommandModule
                 embed.AddField(num + " Roles", roles);
 
             string perms = ""; // Not all permissions are shown
-            if (m.Permissions.HasFlag(DSharpPlus.Permissions.CreateInstantInvite)) perms += ", Invite";
-            if (m.Permissions.HasFlag(DSharpPlus.Permissions.KickMembers)) perms += ", Kick";
-            if (m.Permissions.HasFlag(DSharpPlus.Permissions.BanMembers)) perms += ", Ban";
-            if (m.Permissions.HasFlag(DSharpPlus.Permissions.Administrator)) perms += ", Admin";
-            if (m.Permissions.HasFlag(DSharpPlus.Permissions.ManageChannels)) perms += ", Manage Channels";
-            if (m.Permissions.HasFlag(DSharpPlus.Permissions.ManageGuild)) perms += ", Manage Server";
-            if (m.Permissions.HasFlag(DSharpPlus.Permissions.AddReactions)) perms += ", Reactions";
-            if (m.Permissions.HasFlag(DSharpPlus.Permissions.ViewAuditLog)) perms += ", Audit";
-            if (m.Permissions.HasFlag(DSharpPlus.Permissions.ManageMessages)) perms += ", Manage Messages";
-            if (m.Permissions.HasFlag(DSharpPlus.Permissions.EmbedLinks)) perms += ", Links";
-            if (m.Permissions.HasFlag(DSharpPlus.Permissions.AttachFiles)) perms += ", Files";
-            if (m.Permissions.HasFlag(DSharpPlus.Permissions.UseExternalEmojis)) perms += ", Ext Emojis";
-            if (m.Permissions.HasFlag(DSharpPlus.Permissions.Speak)) perms += ", Speak";
-            if (m.Permissions.HasFlag(DSharpPlus.Permissions.ManageRoles)) perms += ", Manage Roles";
-            if (m.Permissions.HasFlag(DSharpPlus.Permissions.ManageEmojis)) perms += ", Manage Emojis";
-            if (m.Permissions.HasFlag(DSharpPlus.Permissions.UseApplicationCommands)) perms += ", Use Bot";
-            if (m.Permissions.HasFlag(DSharpPlus.Permissions.CreatePublicThreads)) perms += ", Use Threads";
+            GuildPermissions gp = m.GuildPermissions;
+            if (gp.Has(GuildPermission.CreateInstantInvite)) perms += ", Invite";
+            if (gp.Has(GuildPermission.KickMembers)) perms += ", Kick";
+            if (gp.Has(GuildPermission.BanMembers)) perms += ", Ban";
+            if (gp.Has(GuildPermission.Administrator)) perms += ", Admin";
+            if (gp.Has(GuildPermission.ManageChannels)) perms += ", Manage Channels";
+            if (gp.Has(GuildPermission.ManageGuild)) perms += ", Manage Server";
+            if (gp.Has(GuildPermission.AddReactions)) perms += ", Reactions";
+            if (gp.Has(GuildPermission.ViewAuditLog)) perms += ", Audit";
+            if (gp.Has(GuildPermission.ManageMessages)) perms += ", Manage Messages";
+            if (gp.Has(GuildPermission.EmbedLinks)) perms += ", Links";
+            if (gp.Has(GuildPermission.AttachFiles)) perms += ", Files";
+            if (gp.Has(GuildPermission.UseExternalEmojis)) perms += ", Ext Emojis";
+            if (gp.Has(GuildPermission.Speak)) perms += ", Speak";
+            if (gp.Has(GuildPermission.ManageRoles)) perms += ", Manage Roles";
+            if (gp.Has(GuildPermission.ManageEmojisAndStickers)) perms += ", Manage Emojis";
+            if (gp.Has(GuildPermission.UseApplicationCommands)) perms += ", Use Bot";
+            if (gp.Has(GuildPermission.CreatePublicThreads)) perms += ", Use Threads";
             if (perms.Length > 0) embed.AddField("Permissions", perms[2..]);
 
-            await ctx.CreateResponseAsync(embed.Build());
+            await RespondAsync(embed: embed.Build());
         }
         catch (Exception ex)
         {
-            await ctx.CreateResponseAsync(Utils.GenerateErrorAnswer(ctx.Guild.Name, "WhoIs", ex));
+            await RespondAsync(embed: Utils.GenerateErrorAnswer(Context.Guild.Name, "WhoIs", ex));
         }
     }
 }

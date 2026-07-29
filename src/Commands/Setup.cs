@@ -1,9 +1,10 @@
-﻿using DSharpPlus.Entities;
-using DSharpPlus.Interactivity.Extensions;
-using DSharpPlus.SlashCommands;
+﻿using Discord;
+using Discord.Interactions;
+using Discord.WebSocket;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using UPBot.UPBot_Code;
@@ -13,99 +14,160 @@ namespace UPBot
     /// <summary>
     /// This command is used to configure the bot, so roles and messages can be set for other servers.
     /// author: CPU
+    ///
+    /// Ported from DSharpPlus's Interactivity extension (WaitForButtonAsync / WaitForMessageAsync),
+    /// which Discord.Net has no equivalent for. WaitForButtonAsync/WaitForMessageAsync below are
+    /// hand-rolled one-shot event subscriptions. Unlike DSharpPlus, Discord.Net requires every
+    /// component interaction to be acknowledged (deferred) quickly, so each loop iteration defers
+    /// the button press up front; branches that want to show text on that same interaction use
+    /// ModifyOriginalResponseAsync afterwards instead of a second CreateResponseAsync.
     /// </summary>
-    public class SlashSetup : ApplicationCommandModule
+    public class SlashSetup : InteractionModuleBase<SocketInteractionContext>
     {
 
-        private readonly DiscordComponentEmoji ey = new(DiscordEmoji.FromUnicode("✅"));
-        private readonly DiscordComponentEmoji en = new(DiscordEmoji.FromUnicode("❎"));
-        private readonly DiscordComponentEmoji el = new(DiscordEmoji.FromUnicode("↖️"));
-        private readonly DiscordComponentEmoji er = new(DiscordEmoji.FromUnicode("↘️"));
-        private readonly DiscordComponentEmoji ec = new(DiscordEmoji.FromUnicode("❌"));
-        private static DiscordComponentEmoji ok = null;
-        private static DiscordComponentEmoji ko = null;
+        private readonly IEmote ey = new Emoji("✅");
+        private readonly IEmote en = new Emoji("❎");
+        private readonly IEmote el = new Emoji("↖️");
+        private readonly IEmote er = new Emoji("↘️");
+        private readonly IEmote ec = new Emoji("❌");
+        private static IEmote ok = null;
+        private static IEmote ko = null;
+
+        /// <summary>
+        /// Discord.Net has no "wait for the next message matching a predicate" helper.
+        /// </summary>
+        private static Task<SocketMessage> WaitForMessageAsync(Func<SocketMessage, bool> predicate, TimeSpan timeout)
+        {
+            var tcs = new TaskCompletionSource<SocketMessage>();
+            var client = Utils.GetClient();
+
+            Task Handler(SocketMessage m)
+            {
+                if (predicate(m)) tcs.TrySetResult(m);
+                return Task.CompletedTask;
+            }
+
+            client.MessageReceived += Handler;
+
+            _ = Task.Run(async () =>
+            {
+                await Task.WhenAny(tcs.Task, Task.Delay(timeout));
+                client.MessageReceived -= Handler;
+                tcs.TrySetResult(null);
+            });
+
+            return tcs.Task;
+        }
+
+        /// <summary>
+        /// Discord.Net has no "wait for a button press on this message" helper either. Returns
+        /// the raw component interaction (not auto-deferred) so callers can choose how to
+        /// acknowledge it.
+        /// </summary>
+        private static async Task<SocketMessageComponent> WaitForButtonAsync(IUserMessage message, TimeSpan timeout)
+        {
+            if (message == null) return null;
+            var tcs = new TaskCompletionSource<SocketMessageComponent>();
+            var client = Utils.GetClient();
+
+            Task Handler(SocketMessageComponent comp)
+            {
+                if (comp.Message.Id == message.Id) tcs.TrySetResult(comp);
+                return Task.CompletedTask;
+            }
+
+            client.ButtonExecuted += Handler;
+            try
+            {
+                var completed = await Task.WhenAny(tcs.Task, Task.Delay(timeout));
+                return completed == tcs.Task ? tcs.Task.Result : null;
+            }
+            finally
+            {
+                client.ButtonExecuted -= Handler;
+            }
+        }
 
 
         [SlashCommand("setup", "Configuration of the features")]
-        public async Task SetupCommand(InteractionContext ctx, [Option("Command", "Show, List, Admins, or Dump")] SetupCommandItem? command = null)
+        public async Task SetupCommand([Summary("command", "Show, List, Admins, or Dump")] SetupCommandItem? command = null)
         {
-            if (ctx.Guild == null)
+            if (Context.Guild == null)
             {
-                await ctx.CreateResponseAsync("I cannot be used in Direct Messages.", true);
+                await RespondAsync("I cannot be used in Direct Messages.", ephemeral: true);
                 return;
             }
-            Utils.LogUserCommand(ctx);
-            DiscordGuild g = ctx.Guild;
+            Utils.LogUserCommand(Context);
+            SocketGuild g = Context.Guild;
             ulong gid = g.Id;
 
-            if (!Configs.HasAdminRole(gid, ctx.Member.Roles, false))
+            if (!Configs.HasAdminRole(gid, ((SocketGuildUser)Context.User).Roles, false))
             {
-                await ctx.CreateResponseAsync("Only admins can setup the bot.", true);
+                await RespondAsync("Only admins can setup the bot.", ephemeral: true);
                 return;
             }
 
             SlashGame.CleanupTicTacToe(); // Remove all games ruiing when starting the setup
 
-            if (command == null || command == SetupCommandItem.Show) await HandleSetupInteraction(ctx, gid);
-            else if (command == SetupCommandItem.List) await ctx.CreateResponseAsync(GenerateSetupList(g, gid));
+            if (command == null || command == SetupCommandItem.Show) await HandleSetupInteractionAsync(gid);
+            else if (command == SetupCommandItem.List) await RespondAsync(GenerateSetupList(g, gid));
             else if (command == SetupCommandItem.Save)
             {
                 string theList = GenerateSetupList(g, gid);
                 string rndName = "SetupList" + DateTime.Now.Second + "Tmp" + DateTime.Now.Millisecond + ".txt";
                 await File.WriteAllTextAsync(rndName, theList);
                 await using var fs = new FileStream(rndName, FileMode.Open, FileAccess.Read);
-                await ctx.CreateResponseAsync(new DiscordInteractionResponseBuilder().WithContent("Setup List in attachment").AddFile(fs));
+                await RespondWithFileAsync(fs, rndName, "Setup List in attachment");
                 await Utils.DeleteFileDelayed(30, rndName);
             }
-            else await ctx.CreateResponseAsync("Wrong choice", true);
+            else await RespondAsync("Wrong choice", ephemeral: true);
         }
 
-        private async Task HandleSetupInteraction(InteractionContext ctx, ulong gid)
+        private async Task HandleSetupInteractionAsync(ulong gid)
         {
-            var interact = ctx.Client.GetInteractivity();
+            ITextChannel channel = Context.Channel as ITextChannel;
             if (ok == null)
             {
-                ok = new DiscordComponentEmoji(Utils.GetEmoji(EmojiEnum.OK));
-                ko = new DiscordComponentEmoji(Utils.GetEmoji(EmojiEnum.KO));
+                ok = Utils.GetEmoji(EmojiEnum.OK);
+                ko = Utils.GetEmoji(EmojiEnum.KO);
             }
 
             // Basic intro message
-            CreateMainConfigPage(ctx, null);
+            await CreateMainConfigPageAsync();
 
-            DiscordMessage msg = await ctx.GetOriginalResponseAsync();
-            var result = await interact.WaitForButtonAsync(msg, TimeSpan.FromMinutes(2));
-            var interRes = result.Result;
+            IUserMessage msg = await GetOriginalResponseAsync();
+            var interRes = await WaitForButtonAsync(msg, TimeSpan.FromMinutes(2));
             await msg.DeleteAsync();
             msg = null;
 
-            while (interRes != null && interRes.Id != "idexitconfig")
+            while (interRes != null && interRes.Data.CustomId != "idexitconfig")
             {
-                // Removed: interRes.Handled = true; (obsolete in newer DSharpPlus versions)
-                string cmdId = interRes.Id;
+                await interRes.DeferAsync();
+                string cmdId = interRes.Data.CustomId;
 
                 // ******************************************************************** Back *************************************************************************
                 if (cmdId == "idback")
                 {
-                    msg = FollowMainConfigPage(ctx, msg);
+                    msg = await FollowMainConfigPageAsync(msg);
                 }
 
                 // ***************************************************** DefAdmins ***********************************************************************************
                 else if (cmdId == "iddefineadmins")
                 {
-                    msg = CreateAdminsInteraction(ctx, msg);
+                    msg = await CreateAdminsInteractionAsync(msg);
                 }
 
                 // *********************************************************** DefAdmins.AddRole *******************************************************************************
                 else if (cmdId == "idroleadd")
                 {
-                    await ctx.Channel.DeleteMessageAsync(msg);
-                    DiscordMessage prompt = await ctx.Channel.SendMessageAsync(ctx.Member.Mention + ", please mention the roles to add (_type anything else to close_)");
-                    var answer = await interact.WaitForMessageAsync(dm => dm.Channel == ctx.Channel && dm.Author.Id == ctx.Member.Id, TimeSpan.FromMinutes(2));
-                    if (answer.Result != null)
+                    if (msg != null) await msg.DeleteAsync();
+                    IUserMessage prompt = await channel.SendMessageAsync(Context.User.Mention + ", please mention the roles to add (_type anything else to close_)");
+                    var answer = await WaitForMessageAsync(dm => dm.Channel.Id == Context.Channel.Id && dm.Author.Id == Context.User.Id, TimeSpan.FromMinutes(2));
+                    if (answer != null)
                     {
-                        if (answer.Result.MentionedRoles.Count > 0)
+                        if (answer.MentionedRoles.Count > 0)
                         {
-                            foreach (var dr in answer.Result.MentionedRoles)
+                            foreach (var dr in answer.MentionedRoles)
                             {
                                 if (!Configs.AdminRoles[gid].Contains(dr.Id))
                                 {
@@ -116,8 +178,8 @@ namespace UPBot
                         }
                         else
                         { // Try to find if we have a role with the typed name
-                            string rname = answer.Result.Content.Trim();
-                            foreach (var role in ctx.Guild.Roles.Values)
+                            string rname = answer.Content.Trim();
+                            foreach (var role in Context.Guild.Roles)
                             {
                                 if (role.Name.Equals(rname, StringComparison.InvariantCultureIgnoreCase))
                                 {
@@ -131,44 +193,45 @@ namespace UPBot
                         }
                     }
 
-                    await ctx.Channel.DeleteMessageAsync(prompt);
-                    msg = CreateAdminsInteraction(ctx, null);
+                    await prompt.DeleteAsync();
+                    msg = await CreateAdminsInteractionAsync(null);
                 }
 
                 // *********************************************************** DefAdmins.RemRole *******************************************************************************
                 else if (cmdId.Length > 8 && cmdId[..9] == "idrolerem")
                 {
-                    await ctx.Channel.DeleteMessageAsync(msg);
+                    if (msg != null) await msg.DeleteAsync();
                     if (int.TryParse(cmdId[9..], out int rpos))
                     {
-                        ulong rid = Configs.AdminRoles[ctx.Guild.Id][rpos]; ;
+                        ulong rid = Configs.AdminRoles[Context.Guild.Id][rpos];
                         Database.DeleteByKeys<AdminRole>(gid, rid);
-                        Configs.AdminRoles[ctx.Guild.Id].RemoveAt(rpos);
+                        Configs.AdminRoles[Context.Guild.Id].RemoveAt(rpos);
                     }
 
-                    msg = CreateAdminsInteraction(ctx, null);
+                    msg = await CreateAdminsInteractionAsync(null);
                 }
 
                 // ************************************************************ DefTracking **************************************************************************
                 else if (cmdId == "iddefinetracking")
                 {
-                    msg = CreateTrackingInteraction(ctx, msg);
+                    msg = await CreateTrackingInteractionAsync(msg);
                 }
 
                 // ************************************************************ DefTracking.Change Channel ************************************************************************
                 else if (cmdId == "idchangetrackch")
                 {
-                    await ctx.Channel.DeleteMessageAsync(msg);
-                    DiscordMessage prompt = await ctx.Channel.SendMessageAsync(ctx.Member.Mention + ", please mention the channel (_use: **#**_) as tracking channel\nType _remove_ to remove the tracking channel");
-                    var answer = await interact.WaitForMessageAsync(dm => dm.Channel == ctx.Channel && dm.Author.Id == ctx.Member.Id && (dm.MentionedChannels.Count > 0 || dm.Content.Contains("remove", StringComparison.InvariantCultureIgnoreCase)), TimeSpan.FromMinutes(2));
-                    if (answer.Result == null || (answer.Result.MentionedChannels.Count == 0 && !answer.Result.Content.Contains("remove", StringComparison.InvariantCultureIgnoreCase)))
+                    if (msg != null) await msg.DeleteAsync();
+                    IUserMessage prompt = await channel.SendMessageAsync(Context.User.Mention + ", please mention the channel (_use: **#**_) as tracking channel\nType _remove_ to remove the tracking channel");
+                    var answer = await WaitForMessageAsync(dm => dm.Channel.Id == Context.Channel.Id && dm.Author.Id == Context.User.Id && (dm.MentionedChannels.Count > 0 || dm.Content.Contains("remove", StringComparison.InvariantCultureIgnoreCase)), TimeSpan.FromMinutes(2));
+                    if (answer == null || (answer.MentionedChannels.Count == 0 && !answer.Content.Contains("remove", StringComparison.InvariantCultureIgnoreCase)))
                     {
-                        await interRes.Interaction.CreateResponseAsync(DSharpPlus.InteractionResponseType.UpdateMessage, new DiscordInteractionResponseBuilder().WithContent("Config timed out"));
+                        await interRes.ModifyOriginalResponseAsync(m => m.Content = "Config timed out");
                         return;
                     }
 
-                    if (answer.Result.MentionedChannels.Count > 0)
+                    if (answer.MentionedChannels.Count > 0)
                     {
+                        SocketTextChannel mentioned = answer.MentionedChannels.First() as SocketTextChannel;
                         if (Configs.TrackChannels[gid] == null)
                         {
                             TrackChannel tc = new();
@@ -176,20 +239,20 @@ namespace UPBot
                             tc.trackJoin = true;
                             tc.trackLeave = true;
                             tc.trackRoles = true;
-                            tc.channel = answer.Result.MentionedChannels[0];
+                            tc.channel = mentioned;
                             tc.Guild = gid;
                             tc.ChannelId = tc.channel.Id;
                         }
                         else
                         {
                             Database.Delete(Configs.TrackChannels[gid]);
-                            Configs.TrackChannels[gid].channel = answer.Result.MentionedChannels[0];
+                            Configs.TrackChannels[gid].channel = mentioned;
                             Configs.TrackChannels[gid].ChannelId = Configs.TrackChannels[gid].channel.Id;
                         }
                         Database.Add(Configs.TrackChannels[gid]);
 
                     }
-                    else if (answer.Result.Content.Contains("remove", StringComparison.InvariantCultureIgnoreCase))
+                    else if (answer.Content.Contains("remove", StringComparison.InvariantCultureIgnoreCase))
                     {
                         if (Configs.TrackChannels[gid] != null)
                         {
@@ -198,8 +261,8 @@ namespace UPBot
                         }
                     }
 
-                    await ctx.Channel.DeleteMessageAsync(prompt);
-                    msg = CreateTrackingInteraction(ctx, null);
+                    await prompt.DeleteAsync();
+                    msg = await CreateTrackingInteractionAsync(null);
                 }
 
                 // ************************************************************ DefTracking.Remove Tracking ************************************************************************
@@ -211,49 +274,49 @@ namespace UPBot
                         Configs.TrackChannels[gid] = null;
                     }
 
-                    msg = CreateTrackingInteraction(ctx, msg);
+                    msg = await CreateTrackingInteractionAsync(msg);
                 }
 
                 // ************************************************************ Alter Tracking Join ************************************************************************
                 else if (cmdId == "idaltertrackjoin")
                 {
                     AlterTracking(gid, true, false, false);
-                    msg = CreateTrackingInteraction(ctx, msg);
+                    msg = await CreateTrackingInteractionAsync(msg);
                 }
 
                 // ************************************************************ Alter Tracking Leave ************************************************************************
                 else if (cmdId == "idaltertrackleave")
                 {
                     AlterTracking(gid, false, true, false);
-                    msg = CreateTrackingInteraction(ctx, msg);
+                    msg = await CreateTrackingInteractionAsync(msg);
                 }
 
                 // ************************************************************ Alter Tracking Roles ************************************************************************
                 else if (cmdId == "idaltertrackroles")
                 {
                     AlterTracking(gid, false, false, true);
-                    msg = CreateTrackingInteraction(ctx, msg);
+                    msg = await CreateTrackingInteractionAsync(msg);
                 }
 
                 // ************************************************************ Weather API Key ************************************************************************
                 else if (cmdId == "idweatherapi")
                 {
-                    msg = CreateWeatherAPIKeyInteraction(ctx, msg);
+                    msg = await CreateWeatherAPIKeyInteractionAsync(msg);
                 }
 
                 else if (cmdId == "idweatherapiadd")
                 {
-                    await ctx.Channel.SendMessageAsync($"{ctx.Member.Mention}, type the API Key to be used");
-                    var answer = await interact.WaitForMessageAsync(dm => dm.Channel == ctx.Channel && dm.Author.Id == ctx.Member.Id, TimeSpan.FromMinutes(2));
-                    if (string.IsNullOrWhiteSpace(answer.Result.Content))
+                    await channel.SendMessageAsync($"{Context.User.Mention}, type the API Key to be used");
+                    var answer = await WaitForMessageAsync(dm => dm.Channel.Id == Context.Channel.Id && dm.Author.Id == Context.User.Id, TimeSpan.FromMinutes(2));
+                    if (answer == null || string.IsNullOrWhiteSpace(answer.Content))
                     {
-                        await interRes.Interaction.CreateResponseAsync(DSharpPlus.InteractionResponseType.UpdateMessage, new DiscordInteractionResponseBuilder().WithContent("Config timed out"));
+                        await interRes.ModifyOriginalResponseAsync(m => m.Content = "Config timed out");
                         return;
                     }
-                    string key = answer.Result.Content.Trim();
+                    string key = answer.Content.Trim();
                     Configs.SetWeatherAPIKey(key);
 
-                    msg = CreateWeatherAPIKeyInteraction(ctx, msg);
+                    msg = await CreateWeatherAPIKeyInteractionAsync(msg);
                 }
 
 
@@ -270,30 +333,30 @@ namespace UPBot
                     if (cmdId == "idfeatrespamprotect1") sp.protectSteam = !sp.protectSteam;
                     if (cmdId == "idfeatrespamprotect2") sp.protectEpic = !sp.protectEpic;
                     Database.Add(sp);
-                    msg = CreateSpamProtectInteraction(ctx, msg);
+                    msg = await CreateSpamProtectInteractionAsync(msg);
                 }
                 else if (cmdId == "idfeatrespamprotectbl")
                 {
-                    msg = CreateSpamBlackListInteraction(ctx, msg);
+                    msg = await CreateSpamBlackListInteractionAsync(msg);
                 }
                 else if (cmdId == "idfeatrespamprotectwl")
                 {
-                    msg = CreateSpamWhiteListInteraction(ctx, msg);
+                    msg = await CreateSpamWhiteListInteractionAsync(msg);
                 }
                 else if (cmdId.Length > 21 && cmdId[..22] == "idfeatrespamprotectadd")
                 { // Ask for the link, clean it up, and add it
-                    await ctx.Channel.DeleteMessageAsync(msg);
+                    if (msg != null) await msg.DeleteAsync();
                     bool whitelist = cmdId == "idfeatrespamprotectaddwl";
 
-                    await ctx.Channel.SendMessageAsync($"{ctx.Member.Mention}, type the url that should be {(whitelist ? "white listed" : "considered spam")}");
-                    var answer = await interact.WaitForMessageAsync(dm => dm.Channel == ctx.Channel && dm.Author.Id == ctx.Member.Id, TimeSpan.FromMinutes(2));
-                    if (string.IsNullOrWhiteSpace(answer.Result.Content) || !answer.Result.Content.Contains('.'))
+                    await channel.SendMessageAsync($"{Context.User.Mention}, type the url that should be {(whitelist ? "white listed" : "considered spam")}");
+                    var answer = await WaitForMessageAsync(dm => dm.Channel.Id == Context.Channel.Id && dm.Author.Id == Context.User.Id, TimeSpan.FromMinutes(2));
+                    if (answer == null || string.IsNullOrWhiteSpace(answer.Content) || !answer.Content.Contains('.'))
                     {
-                        await interRes.Interaction.CreateResponseAsync(DSharpPlus.InteractionResponseType.UpdateMessage, new DiscordInteractionResponseBuilder().WithContent("Config timed out"));
+                        await interRes.ModifyOriginalResponseAsync(m => m.Content = "Config timed out");
                         return;
                     }
 
-                    string link = answer.Result.Content.Trim();
+                    string link = answer.Content.Trim();
                     Regex urlparts = new("[0-9a-z\\.\\-_~]+");
                     foreach (Match m in urlparts.Matches(link))
                     {
@@ -317,22 +380,22 @@ namespace UPBot
                         }
                         if (!found)
                         {
-                            CheckSpam.SpamCheckTimeout = ctx.Member;
+                            CheckSpam.SpamCheckTimeout = Context.User;
                             if (whitelist)
                             {
                                 Configs.WhiteListLinks[gid].Add(url);
-                                await ctx.Channel.SendMessageAsync("New white list URL added.");
+                                await channel.SendMessageAsync("New white list URL added.");
                                 msg = null;
                             }
                             else
                             {
                                 Configs.SpamLinks[gid].Add(url);
-                                await ctx.Channel.SendMessageAsync("New spam URL added.");
+                                await channel.SendMessageAsync("New spam URL added.");
                                 msg = null;
                             }
                         }
                     }
-                    msg = CreateSpamProtectInteraction(ctx, msg);
+                    msg = await CreateSpamProtectInteractionAsync(msg);
                 }
                 else if (cmdId.Length > 27 && cmdId[..27] == "idfeatrespamprotectremovebl")
                 {
@@ -342,7 +405,7 @@ namespace UPBot
                         Configs.SpamLinks[gid].RemoveAt(num);
                         Database.DeleteByKeys<SpamLink>(gid, link);
                     }
-                    msg = CreateSpamProtectInteraction(ctx, msg);
+                    msg = await CreateSpamProtectInteractionAsync(msg);
                 }
                 else if (cmdId.Length > 27 && cmdId[..27] == "idfeatrespamprotectremovewl")
                 {
@@ -352,27 +415,26 @@ namespace UPBot
                         Configs.WhiteListLinks[gid].RemoveAt(num);
                         Database.DeleteByKeys<SpamLink>(gid, link);
                     }
-                    msg = CreateSpamProtectInteraction(ctx, msg);
+                    msg = await CreateSpamProtectInteractionAsync(msg);
                 }
                 else if (cmdId == "idbackspam")
                 {
-                    msg = CreateSpamProtectInteraction(ctx, msg);
+                    msg = await CreateSpamProtectInteractionAsync(msg);
                 }
 
                 // ***************************************************** UNKNOWN ***********************************************************************************
                 else
                 {
-                    Utils.Log("Unknown interaction result: " + cmdId, ctx.Guild.Name);
+                    Utils.Log("Unknown interaction result: " + cmdId, Context.Guild.Name);
                 }
-                result = await interact.WaitForButtonAsync(msg, TimeSpan.FromMinutes(2));
-                interRes = result.Result;
+                interRes = await WaitForButtonAsync(msg, TimeSpan.FromMinutes(2));
             }
-            if (interRes == null) await ctx.Channel.DeleteMessageAsync(msg); // Expired
-            else await interRes.Interaction.CreateResponseAsync(DSharpPlus.InteractionResponseType.UpdateMessage, new DiscordInteractionResponseBuilder().WithContent("Config completed"));
+            if (interRes == null) { if (msg != null) await msg.DeleteAsync(); } // Expired
+            else await interRes.ModifyOriginalResponseAsync(m => m.Content = "Config completed");
 
         }
 
-        private static string GenerateSetupList(DiscordGuild g, ulong gid)
+        private static string GenerateSetupList(SocketGuild g, ulong gid)
         { // list
 
             string msg = "Setup list for Discord Server " + g.Name + "\n";
@@ -383,7 +445,7 @@ namespace UPBot
             {
                 foreach (var rid in Configs.AdminRoles[gid])
                 {
-                    DiscordRole r = g.GetRole(rid);
+                    SocketRole r = g.GetRole(rid);
                     if (r != null) part += r.Name + ", ";
                 }
                 if (part.Length == 0) msg += "**AdminRoles**: _no roles defined. Owner and roles with Admin flag will be considered bot Admins_\n";
@@ -478,10 +540,10 @@ namespace UPBot
 
         public enum SetupCommandItem
         {
-            [ChoiceName("Show")] Show = 0,
-            [ChoiceName("List")] List = 1,
-            [ChoiceName("Save")] Save = 2,
-            [ChoiceName("Admins")] Admins = 3
+            [ChoiceDisplay("Show")] Show = 0,
+            [ChoiceDisplay("List")] List = 1,
+            [ChoiceDisplay("Save")] Save = 2,
+            [ChoiceDisplay("Admins")] Admins = 3
         }
 
         private static void AlterTracking(ulong gid, bool j, bool l, bool r)
@@ -493,98 +555,90 @@ namespace UPBot
             Database.Update(tc);
         }
 
+        private SocketGuildUser Invoker => (SocketGuildUser)Context.User;
 
-        private void CreateMainConfigPage(InteractionContext ctx, DiscordMessage prevMsg)
+        private async Task CreateMainConfigPageAsync()
         {
-            if (prevMsg != null) ctx.Channel.DeleteMessageAsync(prevMsg).Wait();
-
-            DiscordEmbedBuilder eb = new()
+            EmbedBuilder eb = new()
             {
                 Title = "UPBot Configuration"
             };
-            eb.WithThumbnail(ctx.Guild.IconUrl);
-            eb.Description = "Configuration of the UP Bot for the Discord Server **" + ctx.Guild.Name + "**";
-            eb.WithImageUrl(ctx.Guild.BannerUrl);
-            eb.WithFooter("Member that started the configuration is: " + ctx.Member.DisplayName, ctx.Member.AvatarUrl);
-
-            var builder = new DiscordInteractionResponseBuilder();
-            builder.AddEmbed(eb.Build());
+            eb.WithThumbnailUrl(Context.Guild.IconUrl);
+            eb.Description = "Configuration of the UP Bot for the Discord Server **" + Context.Guild.Name + "**";
+            eb.WithImageUrl(Context.Guild.BannerUrl);
+            eb.WithFooter("Member that started the configuration is: " + Invoker.DisplayName, Invoker.GetDisplayAvatarUrl() ?? Invoker.GetDefaultAvatarUrl());
 
             //- Set tracking
             //- Set Admins
             //- Spam Protection
             //- Weather API Key
-            SpamProtection sp = Configs.SpamProtections[ctx.Guild.Id];
+            SpamProtection sp = Configs.SpamProtections[Context.Guild.Id];
             bool spdisabled = sp == null || (!sp.protectDiscord && !sp.protectSteam && !sp.protectEpic);
-            List<DiscordButtonComponent> actions = [
-      new DiscordButtonComponent(DSharpPlus.ButtonStyle.Primary, "iddefineadmins", "Define Admins", false, er),
-      new DiscordButtonComponent(DSharpPlus.ButtonStyle.Primary, "iddefinetracking", "Define Tracking channel", false, er),
-      new DiscordButtonComponent( spdisabled ? DSharpPlus.ButtonStyle.Secondary : DSharpPlus.ButtonStyle.Primary, "idfeatrespamprotect", "Spam Protection", false, er),
-      new DiscordButtonComponent(DSharpPlus.ButtonStyle.Primary, "idweatherapi", "Weather API Key", false, er)
-    ];
-            builder.AddComponents(actions);
+
+            ComponentBuilder cb = new();
+            cb.WithButton("Define Admins", "iddefineadmins", ButtonStyle.Primary, er);
+            cb.WithButton("Define Tracking channel", "iddefinetracking", ButtonStyle.Primary, er);
+            cb.WithButton("Spam Protection", "idfeatrespamprotect", spdisabled ? ButtonStyle.Secondary : ButtonStyle.Primary, er);
+            cb.WithButton("Weather API Key", "idweatherapi", ButtonStyle.Primary, er);
 
             //-Exit
-            builder.AddComponents(new DiscordButtonComponent(DSharpPlus.ButtonStyle.Danger, "idexitconfig", "Exit", false));
+            cb.WithButton("Exit", "idexitconfig", ButtonStyle.Danger);
 
-            ctx.CreateResponseAsync(builder);
+            await RespondAsync(embed: eb.Build(), components: cb.Build());
         }
 
-        private DiscordMessage FollowMainConfigPage(InteractionContext ctx, DiscordMessage prevMsg)
+        private async Task<IUserMessage> FollowMainConfigPageAsync(IUserMessage prevMsg)
         {
-            if (prevMsg != null) ctx.Channel.DeleteMessageAsync(prevMsg).Wait();
+            if (prevMsg != null) await prevMsg.DeleteAsync();
 
-            DiscordEmbedBuilder eb = new()
+            EmbedBuilder eb = new()
             {
                 Title = "UPBot Configuration"
             };
-            eb.WithThumbnail(ctx.Guild.IconUrl);
-            eb.Description = "Configuration of the UP Bot for the Discord Server **" + ctx.Guild.Name + "**";
-            eb.WithImageUrl(ctx.Guild.BannerUrl);
-            eb.WithFooter("Member that started the configuration is: " + ctx.Member.DisplayName, ctx.Member.AvatarUrl);
-
-            var builder = new DiscordMessageBuilder();
-            builder.AddEmbed(eb.Build());
+            eb.WithThumbnailUrl(Context.Guild.IconUrl);
+            eb.Description = "Configuration of the UP Bot for the Discord Server **" + Context.Guild.Name + "**";
+            eb.WithImageUrl(Context.Guild.BannerUrl);
+            eb.WithFooter("Member that started the configuration is: " + Invoker.DisplayName, Invoker.GetDisplayAvatarUrl() ?? Invoker.GetDefaultAvatarUrl());
 
             //- Set tracking
             //- Set Admins
             //- Spam Protection
-            SpamProtection sp = Configs.SpamProtections[ctx.Guild.Id];
+            SpamProtection sp = Configs.SpamProtections[Context.Guild.Id];
             bool spdisabled = sp == null || (!sp.protectDiscord && !sp.protectSteam && !sp.protectEpic);
-            List<DiscordButtonComponent> actions = [
-      new DiscordButtonComponent(DSharpPlus.ButtonStyle.Primary, "iddefineadmins", "Define Admins", false, er),
-      new DiscordButtonComponent(DSharpPlus.ButtonStyle.Primary, "iddefinetracking", "Define Tracking channel", false, er),
-      new DiscordButtonComponent(spdisabled ? DSharpPlus.ButtonStyle.Secondary : DSharpPlus.ButtonStyle.Primary, "idfeatrespamprotect", "Spam Protection", false, er)
-    ];
-            builder.AddComponents(actions);
+
+            ComponentBuilder cb = new();
+            cb.WithButton("Define Admins", "iddefineadmins", ButtonStyle.Primary, er);
+            cb.WithButton("Define Tracking channel", "iddefinetracking", ButtonStyle.Primary, er);
+            cb.WithButton("Spam Protection", "idfeatrespamprotect", spdisabled ? ButtonStyle.Secondary : ButtonStyle.Primary, er);
 
             //-Exit
-            builder.AddComponents(new DiscordButtonComponent(DSharpPlus.ButtonStyle.Danger, "idexitconfig", "Exit", false, ec));
+            cb.WithButton("Exit", "idexitconfig", ButtonStyle.Danger, ec);
 
-            return ctx.Channel.SendMessageAsync(builder).Result;
+            ITextChannel channel = Context.Channel as ITextChannel;
+            return await channel.SendMessageAsync(embed: eb.Build(), components: cb.Build());
         }
 
-        private DiscordMessage CreateAdminsInteraction(InteractionContext ctx, DiscordMessage prevMsg)
+        private async Task<IUserMessage> CreateAdminsInteractionAsync(IUserMessage prevMsg)
         {
-            if (prevMsg != null) ctx.Channel.DeleteMessageAsync(prevMsg).Wait();
+            if (prevMsg != null) await prevMsg.DeleteAsync();
 
-            DiscordEmbedBuilder eb = new()
+            EmbedBuilder eb = new()
             {
                 Title = "UPBot Configuration - Admin roles"
             };
-            eb.WithThumbnail(ctx.Guild.IconUrl);
-            string desc = "Configuration of the UP Bot for the Discord Server **" + ctx.Guild.Name + "**\n\n\n" +
+            eb.WithThumbnailUrl(Context.Guild.IconUrl);
+            string desc = "Configuration of the UP Bot for the Discord Server **" + Context.Guild.Name + "**\n\n\n" +
               "Current server roles that are considered bot administrators:\n";
 
             // List admin roles
-            if (Configs.AdminRoles[ctx.Guild.Id].Count == 0) desc += "_**No admin roles defined.** Owner and server Admins will be used_";
+            if (Configs.AdminRoles[Context.Guild.Id].Count == 0) desc += "_**No admin roles defined.** Owner and server Admins will be used_";
             else
             {
-                List<ulong> roles = Configs.AdminRoles[ctx.Guild.Id];
+                List<ulong> roles = Configs.AdminRoles[Context.Guild.Id];
                 bool one = false;
                 foreach (ulong role in roles)
                 {
-                    DiscordRole dr = ctx.Guild.GetRole(role);
+                    SocketRole dr = Context.Guild.GetRole(role);
                     if (dr != null)
                     {
                         desc += dr.Mention + ", ";
@@ -595,61 +649,49 @@ namespace UPBot
                 else desc += "_**No admin roles defined.** Owner and server Admins will be used_";
             }
             eb.Description = desc;
-            eb.WithImageUrl(ctx.Guild.BannerUrl);
-            eb.WithFooter("Member that started the configuration is: " + ctx.Member.DisplayName, ctx.Member.AvatarUrl);
+            eb.WithImageUrl(Context.Guild.BannerUrl);
+            eb.WithFooter("Member that started the configuration is: " + Invoker.DisplayName, Invoker.GetDisplayAvatarUrl() ?? Invoker.GetDefaultAvatarUrl());
 
-            var builder = new DiscordMessageBuilder();
-            builder.AddEmbed(eb.Build());
+            ComponentBuilder cb = new();
 
             // - Define roles
-            List<DiscordButtonComponent> actions = [];
-            builder.AddComponents(new DiscordButtonComponent(DSharpPlus.ButtonStyle.Primary, "idroleadd", "Add roles", false, ok));
+            cb.WithButton("Add roles", "idroleadd", ButtonStyle.Primary, ok);
+
             // - Remove roles
             int num = 0;
-            int cols = 0;
-            foreach (ulong rid in Configs.AdminRoles[ctx.Guild.Id])
+            foreach (ulong rid in Configs.AdminRoles[Context.Guild.Id])
             {
-                DiscordRole role = ctx.Guild.GetRole(rid);
+                SocketRole role = Context.Guild.GetRole(rid);
                 if (role == null)
                 {
-                    Database.DeleteByKeys<AdminRole>(ctx.Guild.Id, rid);
+                    Database.DeleteByKeys<AdminRole>(Context.Guild.Id, rid);
                     continue;
                 }
-                actions.Add(new DiscordButtonComponent(DSharpPlus.ButtonStyle.Primary, "idrolerem" + num, "Remove " + role.Name, false, ko));
+                cb.WithButton("Remove " + role.Name, "idrolerem" + num, ButtonStyle.Primary, ko);
                 num++;
-                cols++;
-                if (cols == 5)
-                {
-                    cols = 0;
-                    builder.AddComponents(actions);
-                    actions = [];
-                }
             }
-            if (cols > 0) builder.AddComponents(actions);
 
             // - Exit
             // - Back
-            actions = [
-      new(DSharpPlus.ButtonStyle.Danger, "idexitconfig", "Exit", false, ec),
-      new(DSharpPlus.ButtonStyle.Secondary, "idback", "Back", false, el)
-    ];
-            builder.AddComponents(actions);
+            cb.WithButton("Exit", "idexitconfig", ButtonStyle.Danger, ec);
+            cb.WithButton("Back", "idback", ButtonStyle.Secondary, el);
 
-            return ctx.Channel.SendMessageAsync(builder).Result;
+            ITextChannel channel = Context.Channel as ITextChannel;
+            return await channel.SendMessageAsync(embed: eb.Build(), components: cb.Build());
         }
 
-        private DiscordMessage CreateTrackingInteraction(InteractionContext ctx, DiscordMessage prevMsg)
+        private async Task<IUserMessage> CreateTrackingInteractionAsync(IUserMessage prevMsg)
         {
-            if (prevMsg != null) ctx.Channel.DeleteMessageAsync(prevMsg).Wait();
+            if (prevMsg != null) await prevMsg.DeleteAsync();
 
-            TrackChannel tc = Configs.TrackChannels[ctx.Guild.Id];
+            TrackChannel tc = Configs.TrackChannels[Context.Guild.Id];
 
-            DiscordEmbedBuilder eb = new()
+            EmbedBuilder eb = new()
             {
                 Title = "UPBot Configuration - Tracking channel"
             };
-            eb.WithThumbnail(ctx.Guild.IconUrl);
-            string desc = "Configuration of the UP Bot for the Discord Server **" + ctx.Guild.Name + "**\n\n\n";
+            eb.WithThumbnailUrl(Context.Guild.IconUrl);
+            string desc = "Configuration of the UP Bot for the Discord Server **" + Context.Guild.Name + "**\n\n\n";
             if (tc == null) desc += "_**No tracking channel defined.**_";
             else
             {
@@ -657,233 +699,174 @@ namespace UPBot
                 else desc += "_**Tracking channel:** " + tc.channel.Mention + "_";
             }
             eb.Description = desc;
-            eb.WithImageUrl(ctx.Guild.BannerUrl);
-            eb.WithFooter("Member that started the configuration is: " + ctx.Member.DisplayName, ctx.Member.AvatarUrl);
+            eb.WithImageUrl(Context.Guild.BannerUrl);
+            eb.WithFooter("Member that started the configuration is: " + Invoker.DisplayName, Invoker.GetDisplayAvatarUrl() ?? Invoker.GetDefaultAvatarUrl());
 
-            var builder = new DiscordMessageBuilder();
-            builder.AddEmbed(eb.Build());
+            ComponentBuilder cb = new();
 
             // - Change channel
-            var actions = new List<DiscordButtonComponent> {
-        new(DSharpPlus.ButtonStyle.Primary, "idchangetrackch", "Change channel", false, ok)
-      };
-            if (Configs.TrackChannels[ctx.Guild.Id] != null)
-                actions.Add(new DiscordButtonComponent(DSharpPlus.ButtonStyle.Primary, "idremtrackch", "Remove channel", false, ko));
-            builder.AddComponents(actions);
+            cb.WithButton("Change channel", "idchangetrackch", ButtonStyle.Primary, ok);
+            if (Configs.TrackChannels[Context.Guild.Id] != null)
+                cb.WithButton("Remove channel", "idremtrackch", ButtonStyle.Primary, ko);
 
             // - Actions to track
             if (tc != null)
             {
-                actions =
-                [
-                    tc.trackJoin ? new DiscordButtonComponent(DSharpPlus.ButtonStyle.Primary, "idaltertrackjoin", "Track Join", false, ey) : new DiscordButtonComponent(DSharpPlus.ButtonStyle.Secondary, "idaltertrackjoin", "Track Joint", false, en),
-                    tc.trackLeave ? new DiscordButtonComponent(DSharpPlus.ButtonStyle.Primary, "idaltertrackleave", "Track Leave", false, ey) : new DiscordButtonComponent(DSharpPlus.ButtonStyle.Secondary, "idaltertrackleave", "Track Leave", false, en),
-                    tc.trackRoles ? new DiscordButtonComponent(DSharpPlus.ButtonStyle.Primary, "idaltertrackroles", "Track Roles", false, ey) : new DiscordButtonComponent(DSharpPlus.ButtonStyle.Secondary, "idaltertrackroles", "Track Roles", false, en),
-                ];
-                builder.AddComponents(actions);
+                cb.WithButton(tc.trackJoin ? "Track Join" : "Track Joint", "idaltertrackjoin", tc.trackJoin ? ButtonStyle.Primary : ButtonStyle.Secondary, tc.trackJoin ? ey : en);
+                cb.WithButton("Track Leave", "idaltertrackleave", tc.trackLeave ? ButtonStyle.Primary : ButtonStyle.Secondary, tc.trackLeave ? ey : en);
+                cb.WithButton("Track Roles", "idaltertrackroles", tc.trackRoles ? ButtonStyle.Primary : ButtonStyle.Secondary, tc.trackRoles ? ey : en);
             }
 
             // - Exit
             // - Back
-            actions = [
-      new(DSharpPlus.ButtonStyle.Danger, "idexitconfig", "Exit", false, ec),
-      new(DSharpPlus.ButtonStyle.Secondary, "idback", "Back", false, el)
-    ];
-            builder.AddComponents(actions);
+            cb.WithButton("Exit", "idexitconfig", ButtonStyle.Danger, ec);
+            cb.WithButton("Back", "idback", ButtonStyle.Secondary, el);
 
-            return ctx.Channel.SendMessageAsync(builder).Result;
+            ITextChannel channel = Context.Channel as ITextChannel;
+            return await channel.SendMessageAsync(embed: eb.Build(), components: cb.Build());
         }
 
-        private DiscordMessage CreateSpamProtectInteraction(InteractionContext ctx, DiscordMessage prevMsg)
+        private async Task<IUserMessage> CreateSpamProtectInteractionAsync(IUserMessage prevMsg)
         {
-            if (prevMsg != null) ctx.Channel.DeleteMessageAsync(prevMsg).Wait();
+            if (prevMsg != null) await prevMsg.DeleteAsync();
 
-            DiscordEmbedBuilder eb = new()
+            EmbedBuilder eb = new()
             {
                 Title = "UPBot Configuration - Spam Protection"
             };
-            eb.WithThumbnail(ctx.Guild.IconUrl);
-            SpamProtection sp = Configs.SpamProtections[ctx.Guild.Id];
+            eb.WithThumbnailUrl(Context.Guild.IconUrl);
+            SpamProtection sp = Configs.SpamProtections[Context.Guild.Id];
             bool edisc = sp != null && sp.protectDiscord;
             bool esteam = sp != null && sp.protectSteam;
             bool eepic = sp != null && sp.protectEpic;
-            eb.Description = "Configuration of the UP Bot for the Discord Server **" + ctx.Guild.Name + "**\n\n" +
+            eb.Description = "Configuration of the UP Bot for the Discord Server **" + Context.Guild.Name + "**\n\n" +
               "The **Scam Protection** feature watches messages for suspicious repeat-content and image-spam patterns.\n" +
               "Custom black/white list entries are stored in the SQLite database and can be managed below.\n\n**Spam Protection** for\n";
             eb.Description += "**Discord Nitro** feature is " + (edisc ? "_Enabled_" : "_Disabled_") + " (_recommended!_)\n";
             eb.Description += "**Steam** feature is " + (esteam ? "_Enabled_" : "_Disabled_") + "\n";
             eb.Description += "**Epic Game Store** feature is " + (eepic ? "_Enabled_" : "_Disabled_") + "\n";
-            eb.WithImageUrl(ctx.Guild.BannerUrl);
-            eb.WithFooter("Member that started the configuration is: " + ctx.Member.DisplayName, ctx.Member.AvatarUrl);
+            eb.WithImageUrl(Context.Guild.BannerUrl);
+            eb.WithFooter("Member that started the configuration is: " + Invoker.DisplayName, Invoker.GetDisplayAvatarUrl() ?? Invoker.GetDefaultAvatarUrl());
 
-            var builder = new DiscordMessageBuilder();
-            builder.AddEmbed(eb.Build());
+            ComponentBuilder cb = new();
+            cb.WithButton("Discord Nitro", "idfeatrespamprotect0", edisc ? ButtonStyle.Success : ButtonStyle.Danger, edisc ? ey : en);
+            cb.WithButton("Steam", "idfeatrespamprotect1", esteam ? ButtonStyle.Success : ButtonStyle.Danger, esteam ? ey : en);
+            cb.WithButton("Epic", "idfeatrespamprotect2", eepic ? ButtonStyle.Success : ButtonStyle.Danger, eepic ? ey : en);
 
-            var actions = new List<DiscordButtonComponent> {
-        new(edisc ? DSharpPlus.ButtonStyle.Success : DSharpPlus.ButtonStyle.Danger, "idfeatrespamprotect0", "Discord Nitro", false, edisc ? ey : en),
-        new(esteam ? DSharpPlus.ButtonStyle.Success : DSharpPlus.ButtonStyle.Danger, "idfeatrespamprotect1", "Steam", false, esteam ? ey : en),
-        new(eepic ? DSharpPlus.ButtonStyle.Success : DSharpPlus.ButtonStyle.Danger, "idfeatrespamprotect2", "Epic", false, eepic ? ey : en)
-      };
-            builder.AddComponents(actions);
-
-            actions = [
-      new(DSharpPlus.ButtonStyle.Success, "idfeatrespamprotectbl", "Manage Black List", false, er),
-      new(DSharpPlus.ButtonStyle.Success, "idfeatrespamprotectwl", "Manage White List", false, er)
-    ];
-            builder.AddComponents(actions);
+            cb.WithButton("Manage Black List", "idfeatrespamprotectbl", ButtonStyle.Success, er);
+            cb.WithButton("Manage White List", "idfeatrespamprotectwl", ButtonStyle.Success, er);
 
             // - Exit
             // - Back
-            actions = [
-      new(DSharpPlus.ButtonStyle.Danger, "idexitconfig", "Exit", false, ec),
-      new(DSharpPlus.ButtonStyle.Secondary, "idback", "Back to Main", false, el)
-    ];
-            builder.AddComponents(actions);
+            cb.WithButton("Exit", "idexitconfig", ButtonStyle.Danger, ec);
+            cb.WithButton("Back to Main", "idback", ButtonStyle.Secondary, el);
 
-            return ctx.Channel.SendMessageAsync(builder).Result;
+            ITextChannel channel = Context.Channel as ITextChannel;
+            return await channel.SendMessageAsync(embed: eb.Build(), components: cb.Build());
         }
 
-        private DiscordMessage CreateSpamWhiteListInteraction(InteractionContext ctx, DiscordMessage prevMsg)
+        private async Task<IUserMessage> CreateSpamWhiteListInteractionAsync(IUserMessage prevMsg)
         {
-            if (prevMsg != null) ctx.Channel.DeleteMessageAsync(prevMsg).Wait();
+            if (prevMsg != null) await prevMsg.DeleteAsync();
 
-            DiscordEmbedBuilder eb = new()
+            EmbedBuilder eb = new()
             {
                 Title = "UPBot Configuration - Spam Protection"
             };
-            eb.WithThumbnail(ctx.Guild.IconUrl);
-            eb.Description = "Configuration of the UP Bot for the Discord Server **" + ctx.Guild.Name + "**\n\n" +
+            eb.WithThumbnailUrl(Context.Guild.IconUrl);
+            eb.Description = "Configuration of the UP Bot for the Discord Server **" + Context.Guild.Name + "**\n\n" +
               "White List of links for the **Scam Protection**, these links will always be allowed.\n" +
               "Add with the button a link that will always be accepted in all posted messages.\n" +
               "Click on an existing link button to remove it from the white list.\n" +
               "Entries are stored in SQLite for this server.";
-            eb.WithImageUrl(ctx.Guild.BannerUrl);
-            eb.WithFooter("Member that started the configuration is: " + ctx.Member.DisplayName, ctx.Member.AvatarUrl);
+            eb.WithImageUrl(Context.Guild.BannerUrl);
+            eb.WithFooter("Member that started the configuration is: " + Invoker.DisplayName, Invoker.GetDisplayAvatarUrl() ?? Invoker.GetDefaultAvatarUrl());
 
-            var builder = new DiscordMessageBuilder();
-            builder.AddEmbed(eb.Build());
-
-            var actions = new List<DiscordButtonComponent> {
-        new(DSharpPlus.ButtonStyle.Success, "idfeatrespamprotectaddwl", "Add custom non spam url", false, ok)
-      };
-            builder.AddComponents(actions);
+            ComponentBuilder cb = new();
+            cb.WithButton("Add custom non spam url", "idfeatrespamprotectaddwl", ButtonStyle.Success, ok);
 
             // List all custom spam links
             int counter = 0;
-            actions = [];
-            foreach (string sl in Configs.WhiteListLinks[ctx.Guild.Id])
+            foreach (string sl in Configs.WhiteListLinks[Context.Guild.Id])
             {
-                actions.Add(new DiscordButtonComponent(DSharpPlus.ButtonStyle.Success, $"idfeatrespamprotectremovewl{counter}", sl, false, ko));
+                cb.WithButton(sl, $"idfeatrespamprotectremovewl{counter}", ButtonStyle.Success, ko);
                 counter++;
-                if (counter == 4)
-                {
-                    counter = 0;
-                    builder.AddComponents(actions);
-                    actions = [];
-                }
             }
-            if (actions.Count > 0) builder.AddComponents(actions);
-
 
             // - Exit
             // - Back
-            actions = [
-      new(DSharpPlus.ButtonStyle.Danger, "idexitconfig", "Exit", false, ec),
-      new(DSharpPlus.ButtonStyle.Secondary, "idback", "Back to Main", false, el),
-      new(DSharpPlus.ButtonStyle.Secondary, "idbackspam", "Back to Spam Protection", false, el)
-    ];
-            builder.AddComponents(actions);
+            cb.WithButton("Exit", "idexitconfig", ButtonStyle.Danger, ec);
+            cb.WithButton("Back to Main", "idback", ButtonStyle.Secondary, el);
+            cb.WithButton("Back to Spam Protection", "idbackspam", ButtonStyle.Secondary, el);
 
-            return ctx.Channel.SendMessageAsync(builder).Result;
+            ITextChannel channel = Context.Channel as ITextChannel;
+            return await channel.SendMessageAsync(embed: eb.Build(), components: cb.Build());
         }
 
-        private DiscordMessage CreateSpamBlackListInteraction(InteractionContext ctx, DiscordMessage prevMsg)
+        private async Task<IUserMessage> CreateSpamBlackListInteractionAsync(IUserMessage prevMsg)
         {
-            if (prevMsg != null) ctx.Channel.DeleteMessageAsync(prevMsg).Wait();
+            if (prevMsg != null) await prevMsg.DeleteAsync();
 
-            DiscordEmbedBuilder eb = new()
+            EmbedBuilder eb = new()
             {
                 Title = "UPBot Configuration - Spam Protection"
             };
-            eb.WithThumbnail(ctx.Guild.IconUrl);
-            eb.Description = "Configuration of the UP Bot for the Discord Server **" + ctx.Guild.Name + "**\n\n" +
+            eb.WithThumbnailUrl(Context.Guild.IconUrl);
+            eb.Description = "Configuration of the UP Bot for the Discord Server **" + Context.Guild.Name + "**\n\n" +
               "Black List of links for the **Scam Protection**.\n" +
               "Add with the button a link that will be banned from all messages posted.\n" +
               "Click on an existing link button to remove it from the black list.\n" +
               "Entries are stored in SQLite for this server.";
-            eb.WithImageUrl(ctx.Guild.BannerUrl);
-            eb.WithFooter("Member that started the configuration is: " + ctx.Member.DisplayName, ctx.Member.AvatarUrl);
+            eb.WithImageUrl(Context.Guild.BannerUrl);
+            eb.WithFooter("Member that started the configuration is: " + Invoker.DisplayName, Invoker.GetDisplayAvatarUrl() ?? Invoker.GetDefaultAvatarUrl());
 
-            var builder = new DiscordMessageBuilder();
-            builder.AddEmbed(eb.Build());
-
-            var actions = new List<DiscordButtonComponent> {
-        new(DSharpPlus.ButtonStyle.Success, "idfeatrespamprotectaddbl", "Add custom spam url", false, ok)
-      };
-            builder.AddComponents(actions);
+            ComponentBuilder cb = new();
+            cb.WithButton("Add custom spam url", "idfeatrespamprotectaddbl", ButtonStyle.Success, ok);
 
             // List all custom spam links
             int counter = 0;
-            actions = [];
-            foreach (string sl in Configs.SpamLinks[ctx.Guild.Id])
+            foreach (string sl in Configs.SpamLinks[Context.Guild.Id])
             {
-                actions.Add(new DiscordButtonComponent(DSharpPlus.ButtonStyle.Success, $"idfeatrespamprotectremovebl{counter}", sl, false, ko));
+                cb.WithButton(sl, $"idfeatrespamprotectremovebl{counter}", ButtonStyle.Success, ko);
                 counter++;
-                if (counter == 4)
-                {
-                    counter = 0;
-                    builder.AddComponents(actions);
-                    actions = [];
-                }
             }
-            if (actions.Count > 0) builder.AddComponents(actions);
-
 
             // - Exit
             // - Back
-            actions = [
-      new(DSharpPlus.ButtonStyle.Danger, "idexitconfig", "Exit", false, ec),
-      new(DSharpPlus.ButtonStyle.Secondary, "idback", "Back to Main", false, el),
-      new(DSharpPlus.ButtonStyle.Secondary, "idbackspam", "Back to Spam Protection", false, el)
-    ];
-            builder.AddComponents(actions);
+            cb.WithButton("Exit", "idexitconfig", ButtonStyle.Danger, ec);
+            cb.WithButton("Back to Main", "idback", ButtonStyle.Secondary, el);
+            cb.WithButton("Back to Spam Protection", "idbackspam", ButtonStyle.Secondary, el);
 
-            return ctx.Channel.SendMessageAsync(builder).Result;
+            ITextChannel channel = Context.Channel as ITextChannel;
+            return await channel.SendMessageAsync(embed: eb.Build(), components: cb.Build());
         }
 
-        private DiscordMessage CreateWeatherAPIKeyInteraction(InteractionContext ctx, DiscordMessage prevMsg)
+        private async Task<IUserMessage> CreateWeatherAPIKeyInteractionAsync(IUserMessage prevMsg)
         {
-            if (prevMsg != null) ctx.Channel.DeleteMessageAsync(prevMsg).Wait();
+            if (prevMsg != null) await prevMsg.DeleteAsync();
 
-            DiscordEmbedBuilder eb = new()
+            EmbedBuilder eb = new()
             {
                 Title = "UPBot Configuration - Weather API Key"
             };
-            eb.WithThumbnail(ctx.Guild.IconUrl);
-            eb.Description = "Configuration of the UP Bot for the Discord Server **" + ctx.Guild.Name + "**\n\n" +
+            eb.WithThumbnailUrl(Context.Guild.IconUrl);
+            eb.Description = "Configuration of the UP Bot for the Discord Server **" + Context.Guild.Name + "**\n\n" +
               "**Weather API Key**\n" +
               "Get a an API Key from the site https://www.weatherapi.com/ and type its value here.\n" +
               "Current key: " + (string.IsNullOrWhiteSpace(Configs.WeatherAPIKey) ? "_undefined_" : Configs.WeatherAPIKey);
-            eb.WithImageUrl(ctx.Guild.BannerUrl);
-            eb.WithFooter("Member that started the configuration is: " + ctx.Member.DisplayName, ctx.Member.AvatarUrl);
+            eb.WithImageUrl(Context.Guild.BannerUrl);
+            eb.WithFooter("Member that started the configuration is: " + Invoker.DisplayName, Invoker.GetDisplayAvatarUrl() ?? Invoker.GetDefaultAvatarUrl());
 
-            var builder = new DiscordMessageBuilder();
-            builder.AddEmbed(eb.Build());
-
-            var actions = new List<DiscordButtonComponent> {
-        new(DSharpPlus.ButtonStyle.Success, "idweatherapiadd", "Change API Key", false, ok)
-      };
-            builder.AddComponents(actions);
+            ComponentBuilder cb = new();
+            cb.WithButton("Change API Key", "idweatherapiadd", ButtonStyle.Success, ok);
 
             // - Exit
             // - Back
-            actions = [
-        new(DSharpPlus.ButtonStyle.Danger, "idexitconfig", "Exit", false, ec),
-        new(DSharpPlus.ButtonStyle.Secondary, "idback", "Back to Main", false, el)
-      ];
-            builder.AddComponents(actions);
+            cb.WithButton("Exit", "idexitconfig", ButtonStyle.Danger, ec);
+            cb.WithButton("Back to Main", "idback", ButtonStyle.Secondary, el);
 
-            return ctx.Channel.SendMessageAsync(builder).Result;
+            ITextChannel channel = Context.Channel as ITextChannel;
+            return await channel.SendMessageAsync(embed: eb.Build(), components: cb.Build());
         }
     }
 }

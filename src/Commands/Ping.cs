@@ -1,5 +1,5 @@
-﻿using DSharpPlus.Entities;
-using DSharpPlus.SlashCommands;
+﻿using Discord.Interactions;
+using Discord.WebSocket;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
@@ -12,7 +12,7 @@ using UPBot.UPBot_Code;
 /// </summary>
 /// 
 
-public class SlashPing : ApplicationCommandModule
+public class SlashPing : InteractionModuleBase<SocketInteractionContext>
 {
     private const int MaxTrackedRequests = 10;
     private readonly Random random = new();
@@ -22,12 +22,12 @@ public class SlashPing : ApplicationCommandModule
 
 
     [SlashCommand("ping", "Checks if the bot is alive")]
-    public async Task PingCommand(InteractionContext ctx)
+    public async Task PingCommand()
     {
-        if (ctx.Guild == null)
-            await ctx.CreateResponseAsync("I am alive, but I sould be used only in guilds.", true);
+        if (Context.Guild == null)
+            await RespondAsync("I am alive, but I sould be used only in guilds.", ephemeral: true);
         else
-            await GeneratePong(ctx);
+            await GeneratePong();
     }
 
     private readonly string[,] answers = {
@@ -42,9 +42,9 @@ public class SlashPing : ApplicationCommandModule
   };
 
 
-    private async Task GeneratePong(InteractionContext ctx)
+    private async Task GeneratePong()
     {
-        Utils.LogUserCommand(ctx);
+        Utils.LogUserCommand(Context);
         try
         {
 
@@ -52,7 +52,7 @@ public class SlashPing : ApplicationCommandModule
             lastRequests ??= [];
 
             // Grab the current member id
-            DiscordMember member = ctx.Member;
+            SocketGuildUser member = Context.User as SocketGuildUser;
             ulong memberId = member.Id;
 
             // Find the last request
@@ -75,8 +75,8 @@ public class SlashPing : ApplicationCommandModule
             }
             if (annoyedLevel == -1)
             {
-                await ctx.CreateResponseAsync("...");
-                DiscordMessage empty = ctx.GetOriginalResponseAsync().Result;
+                await RespondAsync("...");
+                var empty = await GetOriginalResponseAsync();
                 await empty.DeleteAsync(); // No answer
                 return;
             }
@@ -89,12 +89,12 @@ public class SlashPing : ApplicationCommandModule
             string msg = answers[annoyedLevel, rnd];
             msg = msg.Replace("$$$", member.DisplayName).Replace("@@@", member.Mention);
 
-            await ctx.CreateResponseAsync(msg);
+            await RespondAsync(msg);
         }
         catch (Exception ex)
         {
-            if (ex is DSharpPlus.Exceptions.NotFoundException) return; // Timed out
-            await ctx.CreateResponseAsync(Utils.GenerateErrorAnswer(ctx.Guild.Name, "Ping", ex));
+            if (ex is Discord.Net.HttpException httpEx && httpEx.HttpCode == System.Net.HttpStatusCode.NotFound) return; // Timed out
+            await RespondAsync(embed: Utils.GenerateErrorAnswer(Context.Guild.Name, "Ping", ex));
         }
     }
 

@@ -1,9 +1,10 @@
-using DSharpPlus;
-using DSharpPlus.Entities;
-using DSharpPlus.SlashCommands;
+using Discord;
+using Discord.Interactions;
+using Discord.WebSocket;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 
@@ -23,14 +24,21 @@ public static class Utils
     /// <summary>
     /// Common colors
     /// </summary>
-    public static readonly DiscordColor Red = new("#f50f48");
-    public static readonly DiscordColor Green = new("#32a852");
+    public static readonly Color Red = FromHex("#f50f48");
+    public static readonly Color Green = FromHex("#32a852");
 
-    public static readonly DiscordColor LightBlue = new("#34cceb");
-    public static readonly DiscordColor Yellow = new("#f5bc42");
+    public static readonly Color LightBlue = FromHex("#34cceb");
+    public static readonly Color Yellow = FromHex("#f5bc42");
+
+    private static Color FromHex(string hex)
+    {
+        hex = hex.TrimStart('#');
+        uint value = Convert.ToUInt32(hex, 16);
+        return new Color(value);
+    }
 
     // Fields relevant for InitClient()
-    private static DiscordClient client;
+    private static DiscordSocketClient client;
 
     private class LogInfo
     {
@@ -42,20 +50,20 @@ public static class Utils
 
     public static string GetVersion()
     {
-        return vmajor + "." + vminor + "." + vbuild + vrev + " - 2026/07/07";
+        return vmajor + "." + vminor + "." + vbuild + vrev + " - 2026/07/26";
     }
 
-    public static DiscordClient GetClient()
+    public static DiscordSocketClient GetClient()
     {
         return client;
     }
 
-    public static void InitClient(DiscordClient c)
+    public static void InitClient(DiscordSocketClient c)
     {
         client = c;
-        if (!DiscordEmoji.TryFromName(client, ":thinking:", out thinkingAsError))
+        if (!TryFindEmoji(":thinking:", out thinkingAsError))
         {
-            thinkingAsError = DiscordEmoji.FromUnicode("🤔");
+            thinkingAsError = new Emoji("🤔");
         }
         emojiNames = [
       ":thinking:", // Thinking = 0,
@@ -77,6 +85,30 @@ public static class Utils
     ];
         emojiUrls = new string[emojiNames.Length];
         emojiSnowflakes = new string[emojiNames.Length];
+    }
+
+    /// <summary>
+    /// Discord.Net has no client-wide "find custom emoji by name" lookup (DSharpPlus did).
+    /// This walks every guild the bot can see and returns the first custom emoji with a
+    /// matching name (colons optional).
+    /// </summary>
+    private static bool TryFindEmoji(string name, out IEmote emoji)
+    {
+        string bare = name.Trim(':');
+        if (client != null)
+        {
+            foreach (var g in client.Guilds)
+            {
+                var e = g.Emotes.FirstOrDefault(x => string.Equals(x.Name, bare, StringComparison.OrdinalIgnoreCase));
+                if (e != null)
+                {
+                    emoji = e;
+                    return true;
+                }
+            }
+        }
+        emoji = null;
+        return false;
     }
 
     public static void InitLogs(string guild)
@@ -167,9 +199,9 @@ public static class Utils
     /// <param name="title">Embed title</param>
     /// <param name="description">Embed description</param>
     /// <param name="color">Embed color</param>
-    public static DiscordEmbedBuilder BuildEmbed(string title, string description, DiscordColor color)
+    public static EmbedBuilder BuildEmbed(string title, string description, Color color)
     {
-        return new DiscordEmbedBuilder
+        return new EmbedBuilder
         {
             Title = title,
             Color = color,
@@ -182,7 +214,7 @@ public static class Utils
     /// </summary>
     /// <param name="error">The error to display</param>
     /// <returns></returns>
-    internal static DiscordEmbed GenerateErrorAnswer(string guild, string cmd, Exception exception)
+    internal static Embed GenerateErrorAnswer(string guild, string cmd, Exception exception)
     {
         string stack = exception.StackTrace;
         // Find all `.cs:` strings
@@ -201,7 +233,7 @@ public static class Utils
             pos = stack.IndexOf(".cs:"); // This will be the previous cs, find the next if any
             pos = stack.IndexOf(".cs:", pos + 1);
         }
-        DiscordEmbedBuilder e = new()
+        EmbedBuilder e = new()
         {
             Color = Red,
             Title = "Error in " + cmd,
@@ -218,9 +250,9 @@ public static class Utils
     /// </summary>
     /// <param name="error">The error to display</param>
     /// <returns></returns>
-    internal static DiscordEmbed GenerateErrorAnswer(string guild, string cmd, string message)
+    internal static Embed GenerateErrorAnswer(string guild, string cmd, string message)
     {
-        DiscordEmbedBuilder e = new()
+        EmbedBuilder e = new()
         {
             Color = Red,
             Title = "Error in " + cmd,
@@ -235,7 +267,7 @@ public static class Utils
     private static string[] emojiNames;
     private static string[] emojiUrls;
     private static string[] emojiSnowflakes;
-    private static DiscordEmoji thinkingAsError;
+    private static IEmote thinkingAsError;
 
     /// <summary>
     /// This function gets the Emoji object corresponding to the emojis of the server.
@@ -243,7 +275,7 @@ public static class Utils
     /// </summary>
     /// <param name="emoji">The emoji to get, specified from the enum</param>
     /// <returns>The requested emoji or the Thinking emoji in case something went wrong</returns>
-    public static DiscordEmoji GetEmoji(EmojiEnum emoji)
+    public static IEmote GetEmoji(EmojiEnum emoji)
     {
         int index = (int)emoji;
         if (index < 0 || index >= emojiNames.Length)
@@ -253,7 +285,7 @@ public static class Utils
             Console.ForegroundColor = ConsoleColor.White;
             return thinkingAsError;
         }
-        if (!DiscordEmoji.TryFromName(client, emojiNames[index], out DiscordEmoji res))
+        if (!TryFindEmoji(emojiNames[index], out IEmote res))
         {
             Console.ForegroundColor = ConsoleColor.Yellow;
             Console.WriteLine($"WARNING: Cannot get requested emoji: {emoji}");
@@ -278,19 +310,19 @@ public static class Utils
             Console.ForegroundColor = ConsoleColor.Yellow;
             Console.WriteLine($"WARNING: Requested wrong emoji");
             Console.ForegroundColor = ConsoleColor.White;
-            return thinkingAsError.Url;
+            return (thinkingAsError as Emote)?.Url ?? "";
         }
 
         if (!string.IsNullOrEmpty(emojiUrls[index])) return emojiUrls[index];
-        if (!DiscordEmoji.TryFromName(client, emojiNames[index], out DiscordEmoji res))
+        if (!TryFindEmoji(emojiNames[index], out IEmote res))
         {
             Console.ForegroundColor = ConsoleColor.Yellow;
             Console.WriteLine($"WARNING: Cannot get requested emoji: {emoji}");
             Console.ForegroundColor = ConsoleColor.White;
-            return thinkingAsError;
+            return (thinkingAsError as Emote)?.Url ?? "";
         }
-        emojiUrls[index] = res.Url;
-        return res.Url;
+        emojiUrls[index] = (res as Emote)?.Url ?? "";
+        return emojiUrls[index];
     }
 
     /// <summary>
@@ -303,18 +335,18 @@ public static class Utils
         int index = (int)emoji;
         if (index < 0 || index >= emojiNames.Length)
         {
-            return "<" + thinkingAsError.GetDiscordName() + thinkingAsError.Id + ">";
+            return thinkingAsError.ToString();
         }
 
         if (!string.IsNullOrEmpty(emojiSnowflakes[index])) return emojiSnowflakes[index];
-        if (!DiscordEmoji.TryFromName(client, emojiNames[index], out DiscordEmoji res))
+        if (!TryFindEmoji(emojiNames[index], out IEmote res))
         {
             Console.ForegroundColor = ConsoleColor.Yellow;
             Console.WriteLine($"WARNING: Cannot get requested emoji: {emoji}");
             Console.ForegroundColor = ConsoleColor.White;
-            return thinkingAsError;
+            return thinkingAsError.ToString();
         }
-        emojiSnowflakes[index] = "<" + res.GetDiscordName() + res.Id + ">";
+        emojiSnowflakes[index] = res.ToString();
         return emojiSnowflakes[index];
     }
 
@@ -323,19 +355,22 @@ public static class Utils
     /// </summary>
     /// <param name="emoji">The emoji to convert</param>
     /// <returns>A string representation of the emoji that can be used in a message</returns>
-    public static string GetEmojiSnowflakeID(DiscordEmoji emoji)
+    public static string GetEmojiSnowflakeID(IEmote emoji)
     {
         if (emoji == null) return "";
-        return "<" + emoji.GetDiscordName() + emoji.Id + ">";
+        return emoji.ToString();
     }
 
-    internal static void LogUserCommand(InteractionContext ctx)
+    internal static void LogUserCommand(SocketInteractionContext ctx)
     {
         Console.ForegroundColor = ConsoleColor.Blue;
-        string log = $"{DateTime.Now:yyyy/MM/dd hh:mm:ss} => {ctx.CommandName} FROM {ctx.Member.DisplayName}";
-        if (ctx.Interaction.Data.Options != null)
-            foreach (var p in ctx.Interaction.Data.Options) log += $" [{p.Name}]{p.Value}";
-        Log(log, ctx.Guild.Name);
+        SocketSlashCommand cmd = ctx.Interaction as SocketSlashCommand;
+        string cmdName = cmd?.Data.Name ?? ctx.Interaction.Type.ToString();
+        SocketGuildUser member = ctx.User as SocketGuildUser;
+        string log = $"{DateTime.Now:yyyy/MM/dd hh:mm:ss} => {cmdName} FROM {member?.DisplayName ?? ctx.User.Username}";
+        if (cmd?.Data.Options != null)
+            foreach (var p in cmd.Data.Options) log += $" [{p.Name}]{p.Value}";
+        Log(log, ctx.Guild?.Name);
         Console.ForegroundColor = ConsoleColor.White;
     }
 
@@ -415,13 +450,13 @@ public static class Utils
     /// Used to delete some messages after a while
     /// </summary>
     /// <param name="msg1"></param>
-    public static Task DeleteDelayed(int seconds, DiscordMessage msg1)
+    public static Task DeleteDelayed(int seconds, IMessage msg1)
     {
         Task.Run(() => DelayAfterAWhile(msg1, seconds * 1000));
         return Task.FromResult(0);
     }
 
-    private static void DelayAfterAWhile(DiscordMessage msg, int delay)
+    private static void DelayAfterAWhile(IMessage msg, int delay)
     {
         try
         {
@@ -431,10 +466,10 @@ public static class Utils
         catch (Exception) { }
     }
 
-    internal static async void DefaultNotAllowed(InteractionContext ctx)
+    internal static async void DefaultNotAllowed(SocketInteractionContext ctx)
     {
-        await ctx.CreateResponseAsync($"The command {ctx.CommandName} is not allowed.");
-        await DeleteDelayed(15, ctx.GetOriginalResponseAsync().Result);
+        await ctx.Interaction.RespondAsync($"The command {(ctx.Interaction as SocketSlashCommand)?.Data.Name} is not allowed.");
+        await DeleteDelayed(15, await ctx.Interaction.GetOriginalResponseAsync());
     }
 
 

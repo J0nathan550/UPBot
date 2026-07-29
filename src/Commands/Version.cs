@@ -1,4 +1,4 @@
-﻿using DSharpPlus.SlashCommands;
+﻿using Discord.Interactions;
 using System.Threading.Tasks;
 using UPBot.UPBot_Code;
 
@@ -9,15 +9,15 @@ using UPBot.UPBot_Code;
 /// </summary>
 /// 
 
-public class SlashVersion : ApplicationCommandModule
+public class SlashVersion : InteractionModuleBase<SocketInteractionContext>
 {
 
     [SlashCommand("version", "Get my version information")]
-    public static async Task VInfoCommand(InteractionContext ctx)
+    public async Task VInfoCommand()
     {
-        string authors = "**CPU**, **J0nathan**, **Eremiell**, **Duck**, **SlicEnDicE**, **Apoorv**, **Revolution**";
+        string authors = "**CPU**, **J0nathan550**, **Eremiell**, **Duck**, **SlicEnDicE**, **Apoorv**, **Revolution**";
 
-        await ctx.CreateResponseAsync(Utils.BuildEmbed("United Programming Bot",
+        await RespondAsync(embed: Utils.BuildEmbed("United Programming Bot",
           $"**Version**: {Utils.GetVersion()}\n\nContributors: {authors}\n\nCode available on https://github.com/United-Programming/UPBot/\n\nJoin United Programming discord: https://discord.gg/unitedprogramming",
           Utils.Yellow).Build());
     }

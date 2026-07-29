@@ -1,11 +1,11 @@
-using DSharpPlus;
-using DSharpPlus.Interactivity;
-using DSharpPlus.Interactivity.Extensions;
-using DSharpPlus.SlashCommands;
+using Discord;
+using Discord.Interactions;
+using Discord.WebSocket;
 using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.DependencyInjection;
 using UPBot.DiscordRPC;
 using UPBot.UPBot_Code;
 
@@ -47,6 +47,8 @@ namespace UPBot
 
         private static readonly CancellationTokenSource exitToken = new();
         private static bool eventsRegistered = false; // guards against re-subscribing handlers on Ready re-fires (reconnects)
+        private static InteractionService interactions;
+        private static IServiceProvider services;
 
         private static async Task MainAsync(string token)
         {
@@ -58,55 +60,51 @@ namespace UPBot
                 Utils.Log("Version: " + Utils.GetVersion(), null);
                 Console.ForegroundColor = ConsoleColor.White;
 
-                var client = new DiscordClient(new DiscordConfiguration()
+                var client = new DiscordSocketClient(new DiscordSocketConfig()
                 {
-                    Token = token, // token has to be passed as parameter
-                    TokenType = TokenType.Bot, // We are a bot
-                    Intents = DiscordIntents.AllUnprivileged | DiscordIntents.GuildMembers | DiscordIntents.MessageContents
-                });
-
-                Utils.Log("Use interactivity", null);
-                client.UseInteractivity(new InteractivityConfiguration()
-                {
-                    Timeout = TimeSpan.FromSeconds(120),
-                    ButtonBehavior = DSharpPlus.Interactivity.Enums.ButtonPaginationBehavior.DeleteMessage,
-                    ResponseBehavior = DSharpPlus.Interactivity.Enums.InteractionResponseBehavior.Ack
+                    GatewayIntents = GatewayIntents.AllUnprivileged | GatewayIntents.GuildMembers | GatewayIntents.MessageContent,
+                    AlwaysDownloadUsers = true
                 });
 
                 Utils.Log("Utils.InitClient", null);
                 Utils.InitClient(client);
-
 
                 Database.InitDb([
           typeof(SpamProtection), typeof(Timezone), typeof(AdminRole), typeof(TrackChannel), typeof(TagBase), typeof(SpamLink), typeof(WeatherAPIKey)
         ]);
                 Utils.Log("Database.InitDb", null);
 
-
-                // SlashCommands
+                // Interaction (slash) commands
                 Utils.Log("SlashCommands", null);
-                var slash = client.UseSlashCommands();
-                slash.RegisterCommands<SlashVersion>();
-                slash.RegisterCommands<SlashPing>();
-                slash.RegisterCommands<SlashUnityDocs>();
-                slash.RegisterCommands<SlashRefactor>();
-                slash.RegisterCommands<SlashDelete>();
-                slash.RegisterCommands<SlashWhoIs>();
-                slash.RegisterCommands<SlashGame>();
-                slash.RegisterCommands<SlashTags>();
-                slash.RegisterCommands<SlashTagsEdit>();
-                slash.RegisterCommands<SlashStats>();
-                slash.RegisterCommands<SlashTimezone>();
-                slash.RegisterCommands<SlashLogs>();
-                slash.RegisterCommands<SlashSetup>();
-                slash.RegisterCommands<Weather>();
+                interactions = new InteractionService(client.Rest);
+                services = new Microsoft.Extensions.DependencyInjection.ServiceCollection().BuildServiceProvider();
 
+                await interactions.AddModuleAsync<SlashVersion>(services);
+                await interactions.AddModuleAsync<SlashPing>(services);
+                await interactions.AddModuleAsync<SlashRefactor>(services);
+                await interactions.AddModuleAsync<SlashDelete>(services);
+                await interactions.AddModuleAsync<SlashWhoIs>(services);
+                await interactions.AddModuleAsync<SlashGame>(services);
+                await interactions.AddModuleAsync<SlashTags>(services);
+                await interactions.AddModuleAsync<SlashTagsEdit>(services);
+                await interactions.AddModuleAsync<SlashStats>(services);
+                await interactions.AddModuleAsync<SlashTimezone>(services);
+                await interactions.AddModuleAsync<SlashLogs>(services);
+                await interactions.AddModuleAsync<SlashSetup>(services);
+                await interactions.AddModuleAsync<Weather>(services);
+
+                client.InteractionCreated += async interaction =>
+                {
+                    var ctx = new SocketInteractionContext(client, interaction);
+                    await interactions.ExecuteCommandAsync(ctx, services);
+                };
 
                 Utils.Log("Connecting to discord...", null);
                 client.Ready += Discord_Ready;
 
                 await Task.Delay(50);
-                await client.ConnectAsync(); // Connect
+                await client.LoginAsync(TokenType.Bot, token);
+                await client.StartAsync();
 
                 // Check for a while if we have any guild
                 int t = 0;
@@ -163,12 +161,23 @@ namespace UPBot
             await Task.Delay(-1, exitToken.Token);
         }
 
-        private static async Task Discord_Ready(DiscordClient client, DSharpPlus.EventArgs.ReadyEventArgs e)
+        private static async Task Discord_Ready()
         {
+            DiscordSocketClient client = Utils.GetClient();
             Console.ForegroundColor = ConsoleColor.Green;
             Utils.Log("connected", null);
             Console.ForegroundColor = ConsoleColor.White;
             Utils.Log("Logging [re]Started at: " + DateTime.Now.ToString("yyyy/MM/dd HH:mm:dd") + " --------------------------------", null);
+
+            // Register slash commands globally now that we're connected
+            try
+            {
+                await interactions.RegisterCommandsGloballyAsync();
+            }
+            catch (Exception ex)
+            {
+                Utils.Log("Failed to register slash commands: " + ex.Message, null);
+            }
 
             await Task.Delay(500);
             Console.ForegroundColor = ConsoleColor.Green;
@@ -177,21 +186,21 @@ namespace UPBot
             _ = WaitForGuildsTask(client);
         }
 
-        private static async Task WaitForGuildsTask(DiscordClient client)
+        private static async Task WaitForGuildsTask(DiscordSocketClient client)
         {
             Dictionary<ulong, bool> guilds = [];
             int toGet = client.Guilds.Count;
-            foreach (ulong key in client.Guilds.Keys)
-                guilds[key] = false;
+            foreach (var g in client.Guilds)
+                guilds[g.Id] = false;
 
             int times = 0;
             bool cleanOldGuilds = true;
             while (true)
             {
                 times++;
-                foreach (var g in client.Guilds.Values)
+                foreach (var g in client.Guilds)
                 {
-                    guilds[g.Id] = !g.IsUnavailable && !string.IsNullOrEmpty(g.Name);
+                    guilds[g.Id] = g.IsConnected && !string.IsNullOrEmpty(g.Name);
                 }
                 int num = 0;
                 foreach (bool b in guilds.Values) if (b) num++;
@@ -231,9 +240,9 @@ namespace UPBot
             // Remove guild that are no more valid
             if (cleanOldGuilds)
             {
-                foreach (var g in client.Guilds.Values)
+                foreach (var g in client.Guilds)
                 {
-                    if (g.IsUnavailable || string.IsNullOrEmpty(g.Name))
+                    if (!g.IsConnected || string.IsNullOrEmpty(g.Name))
                     {
                         Console.ForegroundColor = ConsoleColor.White;
                         Utils.Log("Leaving guild with id: " + g.Id, null);
@@ -254,9 +263,9 @@ namespace UPBot
             Console.ForegroundColor = ConsoleColor.Green;
             Utils.Log($"Got all guilds after '{times}'", null);
             Console.ForegroundColor = ConsoleColor.White;
-            foreach (var g in client.Guilds.Values)
+            foreach (var g in client.Guilds)
             {
-                if (g.IsUnavailable)
+                if (!g.IsConnected)
                 {
                     Console.ForegroundColor = ConsoleColor.Red;
                     Utils.Log($">> {g.Name} (NOT WORKING)", null);
@@ -276,12 +285,12 @@ namespace UPBot
 
                 Console.ForegroundColor = ConsoleColor.Green;
                 Utils.Log("Adding action events", null);
-                client.GuildMemberAdded += MembersTracking.DiscordMemberAdded;
-                client.GuildMemberRemoved += MembersTracking.DiscordMemberRemoved;
+                client.UserJoined += MembersTracking.DiscordMemberAdded;
+                client.UserLeft += MembersTracking.DiscordMemberRemoved;
                 client.GuildMemberUpdated += MembersTracking.DiscordMemberUpdated;
 
-                client.MessageCreated += async (s, e) => { await CheckSpam.CheckMessageCreate(s, e); };
-                client.MessageUpdated += async (s, e) => { await CheckSpam.CheckMessageUpdate(s, e); };
+                client.MessageReceived += async (m) => { await CheckSpam.CheckMessageCreate(m); };
+                client.MessageUpdated += async (before, after, channel) => { await CheckSpam.CheckMessageUpdate(before, after, channel); };
                 Console.ForegroundColor = ConsoleColor.White;
 
                 Console.ForegroundColor = ConsoleColor.Yellow;
@@ -291,7 +300,7 @@ namespace UPBot
                 Utils.Log("DiscordRichPresence", null);
                 DiscordStatus.Start(client);
 
-                client.GuildCreated += Configs.NewGuildAdded;
+                client.JoinedGuild += Configs.NewGuildAdded;
             }
             else
             {

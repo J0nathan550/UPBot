@@ -1,5 +1,4 @@
-﻿using DSharpPlus.Entities;
-using DSharpPlus.SlashCommands;
+﻿using Discord.Interactions;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
@@ -11,20 +10,20 @@ using UPBot.UPBot_Code;
 /// It can be used by admins to check the logs and download them
 /// author: CPU
 /// </summary>
-[SlashCommandGroup("logs", "Commands to show the logs")]
-public class SlashLogs : ApplicationCommandModule
+[Group("logs", "Commands to show the logs")]
+public class SlashLogs : InteractionModuleBase<SocketInteractionContext>
 {
 
     [SlashCommand("show", "Allows to see and download guild logs")]
-    public static async Task LogsCommand(InteractionContext ctx, [Option("NumerOflines", "How many lines of logs to get")][Minimum(5)][Maximum(25)] long numLines)
+    public async Task LogsCommand([Summary("numeroflines", "How many lines of logs to get")][MinValue(5)][MaxValue(25)] long numLines)
     {
-        if (ctx.Guild == null) return;
-        Utils.LogUserCommand(ctx);
+        if (Context.Guild == null) return;
+        Utils.LogUserCommand(Context);
 
-        string logs = Utils.GetLogsPath(ctx.Guild.Name);
+        string logs = Utils.GetLogsPath(Context.Guild.Name);
         if (logs == null)
         {
-            await ctx.CreateResponseAsync($"There are no logs today for the guild **{ctx.Guild.Name}**", true);
+            await RespondAsync($"There are no logs today for the guild **{Context.Guild.Name}**", ephemeral: true);
             return;
         }
 
@@ -48,74 +47,74 @@ public class SlashLogs : ApplicationCommandModule
         }
         if (res.Length > 1990) res = res[-1990..] + "...\n";
         res = $"Last {numLines} lines of logs:\n```\n" + res + "```";
-        await ctx.CreateResponseAsync(res);
+        await RespondAsync(res);
     }
 
 
     [SlashCommand("save", "Creates a zip file of the last logs of the server")]
-    public static async Task LogsSaveCommand(InteractionContext ctx)
+    public async Task LogsSaveCommand()
     {
-        if (ctx.Guild == null) return;
-        Utils.LogUserCommand(ctx);
+        if (Context.Guild == null) return;
+        Utils.LogUserCommand(Context);
 
-        string logs = Utils.GetLogsPath(ctx.Guild.Name);
+        string logs = Utils.GetLogsPath(Context.Guild.Name);
         if (logs == null)
         {
-            await ctx.CreateResponseAsync($"There are no logs today for the guild **{ctx.Guild.Name}**", true);
+            await RespondAsync($"There are no logs today for the guild **{Context.Guild.Name}**", ephemeral: true);
             return;
         }
-        string logsFolder = Utils.GetLastLogsFolder(ctx.Guild.Name, logs);
+        string logsFolder = Utils.GetLastLogsFolder(Context.Guild.Name, logs);
         string outfile = logsFolder[..^1] + ".zip";
         ZipFile.CreateFromDirectory(logsFolder, outfile);
 
 
         await using (FileStream fs = new(outfile, FileMode.Open, FileAccess.Read))
-            await ctx.CreateResponseAsync(new DiscordInteractionResponseBuilder().WithContent("Zipped log in attachment").AddFile(fs));
+            await RespondWithFileAsync(fs, Path.GetFileName(outfile), "Zipped log in attachment");
         await Utils.DeleteFileDelayed(30, outfile);
         await Utils.DeleteFolderDelayed(30, logsFolder);
     }
 
     [SlashCommand("saveall", "Creates a zip file of the all the server logs")]
-    public static async Task LogsSaveAllCommand(InteractionContext ctx)
+    public async Task LogsSaveAllCommand()
     {
-        if (ctx.Guild == null) return;
-        Utils.LogUserCommand(ctx);
+        if (Context.Guild == null) return;
+        Utils.LogUserCommand(Context);
 
-        string logsFolder = Utils.GetAllLogsFolder(ctx.Guild.Name);
+        string logsFolder = Utils.GetAllLogsFolder(Context.Guild.Name);
 
         string outfile = logsFolder[..^1] + ".zip";
         ZipFile.CreateFromDirectory(logsFolder, outfile);
 
         await using (FileStream fs = new(outfile, FileMode.Open, FileAccess.Read))
-            await ctx.CreateResponseAsync(new DiscordInteractionResponseBuilder().WithContent("Zipped logs in attachment").AddFile(fs));
+            await RespondWithFileAsync(fs, Path.GetFileName(outfile), "Zipped logs in attachment");
         await Utils.DeleteFileDelayed(30, outfile);
         await Utils.DeleteFolderDelayed(30, logsFolder);
     }
 
     [SlashCommand("delete", "Removes the server logs")]
-    public static async Task LogsDeleteCommand(InteractionContext ctx, [Option("GuildName", "The name of the guild, case sensitive, to confirm the delete")] string guildname)
+    public async Task LogsDeleteCommand([Summary("guildname", "The name of the guild, case sensitive, to confirm the delete")] string guildname)
     {
-        if (ctx.Guild == null) return;
-        Utils.LogUserCommand(ctx);
+        if (Context.Guild == null) return;
+        Utils.LogUserCommand(Context);
 
-        string logs = Utils.GetLogsPath(ctx.Guild.Name);
+        string logs = Utils.GetLogsPath(Context.Guild.Name);
         if (logs == null)
         {
-            await ctx.CreateResponseAsync($"There are no logs today for the guild **{ctx.Guild.Name}**", true);
+            await RespondAsync($"There are no logs today for the guild **{Context.Guild.Name}**", ephemeral: true);
             return;
         }
 
-        if (!guildname.Equals(ctx.Guild.Name))
+        if (!guildname.Equals(Context.Guild.Name))
         {
-            await ctx.CreateResponseAsync("You have to specify the full guild name after 'delete' (_case sensitive_) to confirm the delete of the logs.", true);
+            await RespondAsync("You have to specify the full guild name after 'delete' (_case sensitive_) to confirm the delete of the logs.", ephemeral: true);
             return;
         }
 
-        int num = Utils.DeleteAllLogs(ctx.Guild.Name);
+        int num = Utils.DeleteAllLogs(Context.Guild.Name);
         if (num == 1)
-            await ctx.CreateResponseAsync($"1 log file for guild **{ctx.Guild.Name}** has been deleted");
+            await RespondAsync($"1 log file for guild **{Context.Guild.Name}** has been deleted");
         else
-            await ctx.CreateResponseAsync($"{num} log files for guild **{ctx.Guild.Name}** have been deleted");
+            await RespondAsync($"{num} log files for guild **{Context.Guild.Name}** have been deleted");
     }
 
 }

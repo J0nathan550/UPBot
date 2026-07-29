@@ -1,4 +1,4 @@
-﻿using DSharpPlus.Entities;
+﻿using Discord.WebSocket;
 
 public class TrackChannel : Entity
 {
@@ -8,7 +8,7 @@ public class TrackChannel : Entity
     public bool trackLeave;
     public bool trackRoles;
 
-    [NotPersistent] public DiscordChannel channel;
+    [NotPersistent] public SocketTextChannel channel;
 
 
 

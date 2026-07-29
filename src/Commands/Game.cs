@@ -1,9 +1,10 @@
-using DSharpPlus.Entities;
-using DSharpPlus.Interactivity.Extensions;
-using DSharpPlus.SlashCommands;
+using Discord;
+using Discord.Interactions;
+using Discord.WebSocket;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using UPBot;
 using UPBot.UPBot_Code;
 
 
@@ -13,15 +14,74 @@ using UPBot.UPBot_Code;
 /// author: SlicEnDicE, J0nathan550
 /// </summary>
 
-[SlashCommandGroup("game", "Commands to play games with the bot")]
-public class SlashGame : ApplicationCommandModule
+[Group("game", "Commands to play games with the bot")]
+public class SlashGame : InteractionModuleBase<SocketInteractionContext>
 {
     private readonly Random random = new();
 
-    [SlashCommand("rockpaperscissors", "Play Rock, Paper, Scissors")]
-    public async Task RPSCommand(InteractionContext ctx, [Option("yourmove", "Rock, Paper, or Scissors")] RPSTypes? yourmove = null)
+    /// <summary>
+    /// Discord.Net has no built-in "wait for the next message that matches a predicate"
+    /// helper (DSharpPlus's Interactivity extension provided this). Reimplemented with a
+    /// one-shot subscription to MessageReceived.
+    /// </summary>
+    private static Task<SocketMessage> WaitForMessageAsync(Func<SocketMessage, bool> predicate, TimeSpan timeout)
     {
-        Utils.LogUserCommand(ctx);
+        var tcs = new TaskCompletionSource<SocketMessage>();
+        var client = Utils.GetClient();
+
+        Task Handler(SocketMessage m)
+        {
+            if (predicate(m)) tcs.TrySetResult(m);
+            return Task.CompletedTask;
+        }
+
+        client.MessageReceived += Handler;
+
+        _ = Task.Run(async () =>
+        {
+            await Task.WhenAny(tcs.Task, Task.Delay(timeout));
+            client.MessageReceived -= Handler;
+            tcs.TrySetResult(null);
+        });
+
+        return tcs.Task;
+    }
+
+    /// <summary>
+    /// Same story for "wait for a button press on this message" (DSharpPlus's
+    /// WaitForButtonAsync). Subscribes to ButtonExecuted, matches on message id, and
+    /// acknowledges the interaction (Defer) before returning its custom id.
+    /// </summary>
+    private static async Task<string> WaitForButtonAsync(IUserMessage message, TimeSpan timeout)
+    {
+        var tcs = new TaskCompletionSource<SocketMessageComponent>();
+        var client = Utils.GetClient();
+
+        Task Handler(SocketMessageComponent comp)
+        {
+            if (comp.Message.Id == message.Id) tcs.TrySetResult(comp);
+            return Task.CompletedTask;
+        }
+
+        client.ButtonExecuted += Handler;
+        try
+        {
+            var completed = await Task.WhenAny(tcs.Task, Task.Delay(timeout));
+            if (completed != tcs.Task) return null;
+            var comp = tcs.Task.Result;
+            await comp.DeferAsync();
+            return comp.Data.CustomId;
+        }
+        finally
+        {
+            client.ButtonExecuted -= Handler;
+        }
+    }
+
+    [SlashCommand("rockpaperscissors", "Play Rock, Paper, Scissors")]
+    public async Task RPSCommand([Summary("yourmove", "Rock, Paper, or Scissors")] RPSTypes? yourmove = null)
+    {
+        Utils.LogUserCommand(Context);
 
         RPSTypes botChoice = (RPSTypes)random.Next(0, 3);
         if (yourmove != null)
@@ -30,125 +90,121 @@ public class SlashGame : ApplicationCommandModule
             {
                 if (botChoice == RPSTypes.Rock)
                 {
-                    await ctx.CreateResponseAsync($"You said 🪨 Rock {ctx.Member.Mention}, I played 🪨 Rock! **DRAW!**");
+                    await RespondAsync($"You said 🪨 Rock {Context.User.Mention}, I played 🪨 Rock! **DRAW!**");
                 }
                 else if (botChoice == RPSTypes.Paper)
                 {
-                    await ctx.CreateResponseAsync($"You said 🪨 Rock {ctx.Member.Mention}, I played 📄 Paper! **I win!**");
+                    await RespondAsync($"You said 🪨 Rock {Context.User.Mention}, I played 📄 Paper! **I win!**");
                 }
                 else
                 {
-                    await ctx.CreateResponseAsync($"You said 🪨 Rock {ctx.Member.Mention}, I played ✂️ Scissor! **You win!**");
+                    await RespondAsync($"You said 🪨 Rock {Context.User.Mention}, I played ✂️ Scissor! **You win!**");
                 }
             }
             else if (yourmove == RPSTypes.Paper)
             {
                 if (botChoice == RPSTypes.Rock)
                 {
-                    await ctx.CreateResponseAsync($"You said 📄 Paper {ctx.Member.Mention}, I played 🪨 Rock! **You win!**");
+                    await RespondAsync($"You said 📄 Paper {Context.User.Mention}, I played 🪨 Rock! **You win!**");
                 }
                 else if (botChoice == RPSTypes.Paper)
                 {
-                    await ctx.CreateResponseAsync($"You said 📄 Paper {ctx.Member.Mention}, I played 📄 Paper! **DRAW!**");
+                    await RespondAsync($"You said 📄 Paper {Context.User.Mention}, I played 📄 Paper! **DRAW!**");
                 }
                 else
                 {
-                    await ctx.CreateResponseAsync($"You said 📄 Paper {ctx.Member.Mention}, I played ✂️ Scissor! **I win!**");
+                    await RespondAsync($"You said 📄 Paper {Context.User.Mention}, I played ✂️ Scissor! **I win!**");
                 }
             }
             else
             {
                 if (botChoice == RPSTypes.Rock)
                 {
-                    await ctx.CreateResponseAsync($"You said ✂️ Scissor {ctx.Member.Mention}, I played 🪨 Rock! **I win!**");
+                    await RespondAsync($"You said ✂️ Scissor {Context.User.Mention}, I played 🪨 Rock! **I win!**");
                 }
                 else if (botChoice == RPSTypes.Paper)
                 {
-                    await ctx.CreateResponseAsync($"You said ✂️ Scissor {ctx.Member.Mention}, I played 📄 Paper! **You win!**");
+                    await RespondAsync($"You said ✂️ Scissor {Context.User.Mention}, I played 📄 Paper! **You win!**");
                 }
                 else
                 {
-                    await ctx.CreateResponseAsync($"You said ✂️ Scissor {ctx.Member.Mention}, I played ✂️ Scissor! **DRAW!**");
+                    await RespondAsync($"You said ✂️ Scissor {Context.User.Mention}, I played ✂️ Scissor! **DRAW!**");
                 }
             }
             return;
         }
 
-        await ctx.CreateResponseAsync("Pick your move");
+        await RespondAsync("Pick your move");
 
-        var builder = new DiscordMessageBuilder().WithContent("Select 🪨, 📄, or ✂️");
-        List<DiscordButtonComponent> actions = [
-      new DiscordButtonComponent(DSharpPlus.ButtonStyle.Primary, "bRock", "🪨 Rock"),
-      new DiscordButtonComponent(DSharpPlus.ButtonStyle.Primary, "bPaper", "📄 Paper"),
-      new DiscordButtonComponent(DSharpPlus.ButtonStyle.Primary, "bScissors", "✂️ Scissors")
-    ];
-        builder.AddComponents(actions);
+        var components = new ComponentBuilder()
+            .WithButton("🪨 Rock", "bRock", ButtonStyle.Primary)
+            .WithButton("📄 Paper", "bPaper", ButtonStyle.Primary)
+            .WithButton("✂️ Scissors", "bScissors", ButtonStyle.Primary);
 
-        DiscordMessage msg = builder.SendAsync(ctx.Channel).Result;
-        var interact = ctx.Client.GetInteractivity();
-        var result = await interact.WaitForButtonAsync(msg, TimeSpan.FromMinutes(2));
-        var interRes = result.Result;
-        if (interRes != null)
+        IMessageChannel channel = Context.Channel;
+        IUserMessage msg = await channel.SendMessageAsync("Select 🪨, 📄, or ✂️", components: components.Build());
+        string buttonId = await WaitForButtonAsync(msg, TimeSpan.FromMinutes(2));
+        if (buttonId != null)
         {
-            if (result.Result.Id == "bRock")
+            if (buttonId == "bRock")
             {
                 if (botChoice == RPSTypes.Rock)
                 {
-                    await ctx.Channel.SendMessageAsync($"You said 🪨 Rock {ctx.Member.Mention}, I played 🪨 Rock! **DRAW!**");
+                    await channel.SendMessageAsync($"You said 🪨 Rock {Context.User.Mention}, I played 🪨 Rock! **DRAW!**");
                 }
                 else if (botChoice == RPSTypes.Paper)
                 {
-                    await ctx.Channel.SendMessageAsync($"You said 🪨 Rock {ctx.Member.Mention}, I played 📄 Paper! **I win!**");
+                    await channel.SendMessageAsync($"You said 🪨 Rock {Context.User.Mention}, I played 📄 Paper! **I win!**");
                 }
                 else
                 {
-                    await ctx.Channel.SendMessageAsync($"You said 🪨 Rock {ctx.Member.Mention}, I played ✂️ Scissor! **You win!**");
+                    await channel.SendMessageAsync($"You said 🪨 Rock {Context.User.Mention}, I played ✂️ Scissor! **You win!**");
                 }
             }
-            else if (result.Result.Id == "bPaper")
+            else if (buttonId == "bPaper")
             {
                 if (botChoice == RPSTypes.Rock)
                 {
-                    await ctx.Channel.SendMessageAsync($"You said 📄 Paper {ctx.Member.Mention}, I played 🪨 Rock! **You win!**");
+                    await channel.SendMessageAsync($"You said 📄 Paper {Context.User.Mention}, I played 🪨 Rock! **You win!**");
                 }
                 else if (botChoice == RPSTypes.Paper)
                 {
-                    await ctx.Channel.SendMessageAsync($"You said 📄 Paper {ctx.Member.Mention}, I played 📄 Paper! **DRAW!**");
+                    await channel.SendMessageAsync($"You said 📄 Paper {Context.User.Mention}, I played 📄 Paper! **DRAW!**");
                 }
                 else
                 {
-                    await ctx.Channel.SendMessageAsync($"You said 📄 Paper {ctx.Member.Mention}, I played ✂️ Scissor! **I win!**");
+                    await channel.SendMessageAsync($"You said 📄 Paper {Context.User.Mention}, I played ✂️ Scissor! **I win!**");
                 }
             }
-            else if (result.Result.Id == "bScissors")
+            else if (buttonId == "bScissors")
             {
-                await ctx.Channel.SendMessageAsync($"You said ✂️ Scissor {ctx.Member.Mention}, I played 🪨 Rock! **I win!**");
+                await channel.SendMessageAsync($"You said ✂️ Scissor {Context.User.Mention}, I played 🪨 Rock! **I win!**");
             }
             else if (botChoice == RPSTypes.Paper)
             {
-                await ctx.Channel.SendMessageAsync($"You said ✂️ Scissor {ctx.Member.Mention}, I played 📄 Paper! **You win!**");
+                await channel.SendMessageAsync($"You said ✂️ Scissor {Context.User.Mention}, I played 📄 Paper! **You win!**");
             }
             else
             {
-                await ctx.Channel.SendMessageAsync($"You said ✂️ Scissor {ctx.Member.Mention}, I played ✂️ Scissor! **DRAW!**");
+                await channel.SendMessageAsync($"You said ✂️ Scissor {Context.User.Mention}, I played ✂️ Scissor! **DRAW!**");
             }
         }
-        await ctx.Channel.DeleteMessageAsync(msg);
+        await msg.DeleteAsync();
     }
 
     public enum RPSTypes
     { // 🪨📄
-        [ChoiceName("Rock")] Rock = 0,
-        [ChoiceName("Paper")] Paper = 1,
-        [ChoiceName("Scissors")] Scissors = 2
+        [ChoiceDisplay("Rock")] Rock = 0,
+        [ChoiceDisplay("Paper")] Paper = 1,
+        [ChoiceDisplay("Scissors")] Scissors = 2
     }
     public enum RPSLSTypes
     { // 🪨📄✂️🦎🖖
-        [ChoiceName("🪨 Rock")] Rock = 0,
-        [ChoiceName("📄 Paper")] Paper = 1,
-        [ChoiceName("✂️ Scissors")] Scissors = 2,
-        [ChoiceName("🦎 Lizard")] Lizard = 3,
-        [ChoiceName("🖖 Spock")] Spock = 4
+        [ChoiceDisplay("🪨 Rock")] Rock = 0,
+        [ChoiceDisplay("📄 Paper")] Paper = 1,
+        [ChoiceDisplay("✂️ Scissors")] Scissors = 2,
+        [ChoiceDisplay("🦎 Lizard")] Lizard = 3,
+        [ChoiceDisplay("🖖 Spock")] Spock = 4
     }
     private enum RPSRes { First, Second, Draw }
     private readonly RPSRes[][] rpslsRes = [
@@ -183,9 +239,9 @@ public class SlashGame : ApplicationCommandModule
 
 
     [SlashCommand("rockpaperscissorslizardspock", "Play Rock, Paper, Scissors, Lizard, Spock")]
-    public async Task RPSLKCommand(InteractionContext ctx, [Option("yourmove", "Rock, Paper, or Scissors")] RPSLSTypes? yourmove = null)
+    public async Task RPSLKCommand([Summary("yourmove", "Rock, Paper, or Scissors")] RPSLSTypes? yourmove = null)
     {
-        Utils.LogUserCommand(ctx);
+        Utils.LogUserCommand(Context);
 
         RPSLSTypes botChoice = (RPSLSTypes)random.Next(0, 5);
         if (yourmove != null)
@@ -194,38 +250,34 @@ public class SlashGame : ApplicationCommandModule
             switch (rpslsRes[(int)yourmove][(int)botChoice])
             {
                 case RPSRes.First:
-                    await ctx.CreateResponseAsync($"You said {GetChoice(yourmove)} {ctx.Member.Mention}, I played {GetChoice(botChoice)}! {resmsg} **You win!**");
+                    await RespondAsync($"You said {GetChoice(yourmove)} {Context.User.Mention}, I played {GetChoice(botChoice)}! {resmsg} **You win!**");
                     break;
                 case RPSRes.Second:
-                    await ctx.CreateResponseAsync($"You said {GetChoice(yourmove)} {ctx.Member.Mention}, I played {GetChoice(botChoice)}! {resmsg} **I win!**");
+                    await RespondAsync($"You said {GetChoice(yourmove)} {Context.User.Mention}, I played {GetChoice(botChoice)}! {resmsg} **I win!**");
                     break;
                 case RPSRes.Draw:
-                    await ctx.CreateResponseAsync($"You said {GetChoice(yourmove)} {ctx.Member.Mention}, I played {GetChoice(botChoice)}! **DRAW!**");
+                    await RespondAsync($"You said {GetChoice(yourmove)} {Context.User.Mention}, I played {GetChoice(botChoice)}! **DRAW!**");
                     break;
             }
             return;
         }
 
-        await ctx.CreateResponseAsync("Pick your move");
+        await RespondAsync("Pick your move");
 
 
-        var builder = new DiscordMessageBuilder().WithContent("Select 🪨, 📄, ✂️, 🦎, or 🖖");
-        List<DiscordButtonComponent> actions = [
-      new DiscordButtonComponent(DSharpPlus.ButtonStyle.Primary, "bRock", "🪨 Rock"),
-      new DiscordButtonComponent(DSharpPlus.ButtonStyle.Primary, "bPaper", "📄 Paper"),
-      new DiscordButtonComponent(DSharpPlus.ButtonStyle.Primary, "bScissors", "✂️ Scissors"),
-      new DiscordButtonComponent(DSharpPlus.ButtonStyle.Primary, "bLizard", "🦎 Lizard"),
-      new DiscordButtonComponent(DSharpPlus.ButtonStyle.Primary, "bSpock", "🖖 Spock")
-    ];
-        builder.AddComponents(actions);
+        var components = new ComponentBuilder()
+            .WithButton("🪨 Rock", "bRock", ButtonStyle.Primary)
+            .WithButton("📄 Paper", "bPaper", ButtonStyle.Primary)
+            .WithButton("✂️ Scissors", "bScissors", ButtonStyle.Primary)
+            .WithButton("🦎 Lizard", "bLizard", ButtonStyle.Primary)
+            .WithButton("🖖 Spock", "bSpock", ButtonStyle.Primary);
 
-        DiscordMessage msg = builder.SendAsync(ctx.Channel).Result;
-        var interact = ctx.Client.GetInteractivity();
-        var result = await interact.WaitForButtonAsync(msg, TimeSpan.FromMinutes(2));
-        var interRes = result.Result;
-        if (interRes != null)
+        IMessageChannel channel = Context.Channel;
+        IUserMessage msg = await channel.SendMessageAsync("Select 🪨, 📄, ✂️, 🦎, or 🖖", components: components.Build());
+        string buttonId = await WaitForButtonAsync(msg, TimeSpan.FromMinutes(2));
+        if (buttonId != null)
         {
-            yourmove = result.Result.Id switch
+            yourmove = buttonId switch
             {
                 "bRock" => RPSLSTypes.Rock,
                 "bPaper" => RPSLSTypes.Paper,
@@ -238,23 +290,23 @@ public class SlashGame : ApplicationCommandModule
             switch (rpslsRes[(int)yourmove][(int)botChoice])
             {
                 case RPSRes.First:
-                    await ctx.Channel.SendMessageAsync($"You said {GetChoice(yourmove)} {ctx.Member.Mention}, I played {GetChoice(botChoice)}! {resmsg}: **You win!**");
+                    await channel.SendMessageAsync($"You said {GetChoice(yourmove)} {Context.User.Mention}, I played {GetChoice(botChoice)}! {resmsg}: **You win!**");
                     break;
                 case RPSRes.Second:
-                    await ctx.Channel.SendMessageAsync($"You said {GetChoice(yourmove)} {ctx.Member.Mention}, I played {GetChoice(botChoice)}! {resmsg}: **I win!**");
+                    await channel.SendMessageAsync($"You said {GetChoice(yourmove)} {Context.User.Mention}, I played {GetChoice(botChoice)}! {resmsg}: **I win!**");
                     break;
                 case RPSRes.Draw:
-                    await ctx.Channel.SendMessageAsync($"You said {GetChoice(yourmove)} {ctx.Member.Mention}, I played {GetChoice(botChoice)}! **DRAW!**");
+                    await channel.SendMessageAsync($"You said {GetChoice(yourmove)} {Context.User.Mention}, I played {GetChoice(botChoice)}! **DRAW!**");
                     break;
             }
         }
-        await ctx.Channel.DeleteMessageAsync(msg); // Expired
+        await msg.DeleteAsync(); // Expired
     }
     [SlashCommand("coin", "Flip a coin, to deside your choice!")]
 
-    public async Task CoinFlipCommand(InteractionContext ctx, [Option("firstoption", "Optional: You have to do this is the coin is Head")] string firstOption = null, [Option("secondoption", "Optional: You have to do this is the coin is Tails")] string secondOption = null)
+    public async Task CoinFlipCommand([Summary("firstoption", "Optional: You have to do this is the coin is Head")] string firstOption = null, [Summary("secondoption", "Optional: You have to do this is the coin is Tails")] string secondOption = null)
     {
-        Utils.LogUserCommand(ctx);
+        Utils.LogUserCommand(Context);
         int randomNumber;
         if (firstOption == null || secondOption == null)
         {
@@ -262,32 +314,26 @@ public class SlashGame : ApplicationCommandModule
             switch (randomNumber)
             {
                 case 0:
-                    var builder = new DiscordEmbedBuilder
+                    var builder = new EmbedBuilder
                     {
                         Title = "Coin Flip!",
-                        Color = DiscordColor.Yellow,
-                        Thumbnail = new DiscordEmbedBuilder.EmbedThumbnail
-                        {
-                            Url = "https://emojipedia-us.s3.dualstack.us-west-1.amazonaws.com/thumbs/120/apple/325/coin_1fa99.png"
-                        },
+                        Color = TagColors.Yellow,
+                        ThumbnailUrl = "https://emojipedia-us.s3.dualstack.us-west-1.amazonaws.com/thumbs/120/apple/325/coin_1fa99.png",
                         Description = "Heads on the coin!",
                         Timestamp = DateTime.Now
                     };
-                    await ctx.CreateResponseAsync(builder);
+                    await RespondAsync(embed: builder.Build());
                     break;
                 case 1:
-                    var builder1 = new DiscordEmbedBuilder
+                    var builder1 = new EmbedBuilder
                     {
                         Title = "Coin Flip!",
-                        Color = DiscordColor.Yellow,
-                        Thumbnail = new DiscordEmbedBuilder.EmbedThumbnail
-                        {
-                            Url = "https://emojipedia-us.s3.dualstack.us-west-1.amazonaws.com/thumbs/160/samsung/265/coin_1fa99.png"
-                        },
+                        Color = TagColors.Yellow,
+                        ThumbnailUrl = "https://emojipedia-us.s3.dualstack.us-west-1.amazonaws.com/thumbs/160/samsung/265/coin_1fa99.png",
                         Description = "Tails on the coin!",
                         Timestamp = DateTime.Now
                     };
-                    await ctx.CreateResponseAsync(builder1);
+                    await RespondAsync(embed: builder1.Build());
                     break;
             }
             return;
@@ -296,34 +342,28 @@ public class SlashGame : ApplicationCommandModule
         switch (randomNumber)
         {
             case 0:
-                var builder = new DiscordEmbedBuilder
+                var builder2 = new EmbedBuilder
                 {
                     Title = "Coin Flip!",
-                    Color = DiscordColor.Yellow,
-                    Thumbnail = new DiscordEmbedBuilder.EmbedThumbnail
-                    {
-                        Url = "https://emojipedia-us.s3.dualstack.us-west-1.amazonaws.com/thumbs/120/apple/325/coin_1fa99.png"
-                    },
+                    Color = TagColors.Yellow,
+                    ThumbnailUrl = "https://emojipedia-us.s3.dualstack.us-west-1.amazonaws.com/thumbs/120/apple/325/coin_1fa99.png",
                     Description = "Heads on the coin!\n" +
                     $"You have to: **{firstOption}**",
                     Timestamp = DateTime.Now
                 };
-                await ctx.CreateResponseAsync(builder);
+                await RespondAsync(embed: builder2.Build());
                 break;
             case 1:
-                var builder1 = new DiscordEmbedBuilder
+                var builder3 = new EmbedBuilder
                 {
                     Title = "Coin Flip!",
-                    Color = DiscordColor.Yellow,
-                    Thumbnail = new DiscordEmbedBuilder.EmbedThumbnail
-                    {
-                        Url = "https://emojipedia-us.s3.dualstack.us-west-1.amazonaws.com/thumbs/160/samsung/265/coin_1fa99.png"
-                    },
+                    Color = TagColors.Yellow,
+                    ThumbnailUrl = "https://emojipedia-us.s3.dualstack.us-west-1.amazonaws.com/thumbs/160/samsung/265/coin_1fa99.png",
                     Description = "Tails on the coin!\n" +
                     $"You have to: **{secondOption}**",
                     Timestamp = DateTime.Now
                 };
-                await ctx.CreateResponseAsync(builder1);
+                await RespondAsync(embed: builder3.Build());
                 break;
         }
     }
@@ -357,73 +397,73 @@ public class SlashGame : ApplicationCommandModule
     }
 
     [SlashCommand("tictactoe", "Play Tic-Tac-Toe game with someone or aganinst the bot.")]
-    public async Task TicTacToeGame(InteractionContext ctx, [Option("opponent", "Select a Discord user to play with (keep empty to play with the bot)")] DiscordUser opponent = null)
+    public async Task TicTacToeGame([Summary("opponent", "Select a Discord user to play with (keep empty to play with the bot)")] IUser opponent = null)
     {
-        Utils.LogUserCommand(ctx);
+        Utils.LogUserCommand(Context);
         int[] grid = [0, 0, 0, 0, 0, 0, 0, 0, 0];
-        DiscordMember player = ctx.Member;
+        SocketGuildUser player = Context.User as SocketGuildUser;
         bool oMoves = true;
 
-        var interact = ctx.Client.GetInteractivity();
+        IMessageChannel channel = Context.Channel;
 
         // Game loop
         try
         {
             bool firstDone = false;
-            DiscordEmbedBuilder message = new();
-            if (opponent == null || opponent.Id == Utils.GetClient().CurrentUser.Id || opponent.Id == ctx.Member.Id)
+            EmbedBuilder message = new();
+            if (opponent == null || opponent.Id == Utils.GetClient().CurrentUser.Id || opponent.Id == Context.User.Id)
             {
-                if (tttPlayers.Contains(ctx.Member.Id))
+                if (tttPlayers.Contains(Context.User.Id))
                 {
                     message.Title = $"You are already playing Tic-Tac-Toe!\n{player.DisplayName}";
-                    message.Color = DiscordColor.Red;
-                    await ctx.CreateResponseAsync(message.Build());
+                    message.Color = TagColors.Red;
+                    await RespondAsync(embed: message.Build());
                     return;
                 }
-                tttPlayers.Add(ctx.Member.Id);
+                tttPlayers.Add(Context.User.Id);
             }
             else
             {
-                if (tttPlayers.Contains(ctx.Member.Id))
+                if (tttPlayers.Contains(Context.User.Id))
                 {
                     message.Title = $"You are already playing Tic-Tac-Toe!\n{player.DisplayName}";
-                    message.Color = DiscordColor.Red;
-                    await ctx.CreateResponseAsync(message.Build());
+                    message.Color = TagColors.Red;
+                    await RespondAsync(embed: message.Build());
                     return;
                 }
                 if (tttPlayers.Contains(opponent.Id))
                 {
                     message.Title = $"{opponent.Username} is already playing Tic-Tac-Toe!";
-                    message.Color = DiscordColor.Red;
-                    await ctx.CreateResponseAsync(message.Build());
+                    message.Color = TagColors.Red;
+                    await RespondAsync(embed: message.Build());
                     return;
                 }
                 tttPlayers.Add(opponent.Id);
-                tttPlayers.Add(ctx.Member.Id);
+                tttPlayers.Add(Context.User.Id);
 
                 message.Description = $"**Playing with {opponent.Mention}**";
                 message.Title = $"Tic-Tac-Toe Game {player.DisplayName}/{opponent.Username}";
                 message.Timestamp = DateTime.Now;
-                message.Color = DiscordColor.Red;
-                await ctx.CreateResponseAsync(message.Build());
+                message.Color = TagColors.Red;
+                await RespondAsync(embed: message.Build());
                 firstDone = true;
             }
 
 
-            DiscordMessage board = null;
+            IUserMessage board = null;
             while (true)
             {
 
                 // Print the board
 
-                message = new DiscordEmbedBuilder();
-                if (opponent == null || opponent.Id == Utils.GetClient().CurrentUser.Id || opponent.Id == ctx.Member.Id)
+                message = new EmbedBuilder();
+                if (opponent == null || opponent.Id == Utils.GetClient().CurrentUser.Id || opponent.Id == Context.User.Id)
                 {
                     message.Title = $"Tic-Tac-Toe Game {player.DisplayName}/Bot";
                     if (oMoves) message.Description = $"{player.DisplayName}: Type a number between 1 and 9 to make a move.\n\n{PrintBoard(grid)}";
                     // no need to print the board for the bot
                     message.Timestamp = DateTime.Now;
-                    message.Color = DiscordColor.Red;
+                    message.Color = TagColors.Red;
                 }
                 else
                 {
@@ -432,44 +472,44 @@ public class SlashGame : ApplicationCommandModule
                         : $"{player.DisplayName}: Type a number between 1 and 9 to make a move.\n\n" + PrintBoard(grid);
                     message.Title = $"Tic-Tac-Toe Game {player.DisplayName}/{opponent.Username}";
                     message.Timestamp = DateTime.Now;
-                    message.Color = DiscordColor.Red;
+                    message.Color = TagColors.Red;
                 }
-                if (oMoves || (opponent != null && opponent.Id != Utils.GetClient().CurrentUser.Id && opponent.Id != ctx.Member.Id))
+                if (oMoves || (opponent != null && opponent.Id != Utils.GetClient().CurrentUser.Id && opponent.Id != Context.User.Id))
                 {
                     if (board != null) await board.DeleteAsync();
 
                     if (firstDone)
-                        board = await ctx.FollowUpAsync(new DiscordFollowupMessageBuilder().AddEmbed(message));
+                        board = await FollowupAsync(embed: message.Build());
                     else
                     {
-                        await ctx.CreateResponseAsync(message.Build());
+                        await RespondAsync(embed: message.Build());
                         firstDone = true;
                     }
                 }
 
                 if (oMoves || opponent != null)
                 { // Get the answer from the current user
-                    var answer = await interact.WaitForMessageAsync(dm => opponent == null || !oMoves ?
-                      dm.Channel == ctx.Channel && dm.Author.Id == ctx.Member.Id : dm.Channel == ctx.Channel && dm.Author.Id == opponent.Id, TimeSpan.FromMinutes(1));
+                    var answer = await WaitForMessageAsync(dm => opponent == null || !oMoves ?
+                      dm.Channel.Id == Context.Channel.Id && dm.Author.Id == Context.User.Id : dm.Channel.Id == Context.Channel.Id && dm.Author.Id == opponent.Id, TimeSpan.FromMinutes(1));
 
-                    if (answer.Result == null)
+                    if (answer == null)
                     {
-                        message = new DiscordEmbedBuilder
+                        message = new EmbedBuilder
                         {
                             Title = "Time expired!",
-                            Color = DiscordColor.Red,
+                            Color = TagColors.Red,
                             Description = $"You took too much time to type your move. Game is ended!",
                             Timestamp = DateTime.Now
                         };
                         if (board != null) await board.DeleteAsync();
-                        await ctx.FollowUpAsync(new DiscordFollowupMessageBuilder().AddEmbed(message));
+                        await FollowupAsync(embed: message.Build());
 
                         if (opponent != null) tttPlayers.Remove(opponent.Id);
-                        tttPlayers.Remove(ctx.Member.Id);
+                        tttPlayers.Remove(Context.User.Id);
                         return;
                     }
 
-                    if (int.TryParse(answer.Result.Content, out var cell))
+                    if (int.TryParse(answer.Content, out var cell))
                     {
                         if (cell < 1 || cell > 9) continue;
                         cell--;
@@ -533,32 +573,32 @@ public class SlashGame : ApplicationCommandModule
 
                 if (oWins)
                 {
-                    message = new DiscordEmbedBuilder
+                    message = new EmbedBuilder
                     {
                         Title = $"Tic-Tac-Toe Game: :o: ({(opponent == null ? player.Username : opponent.Username)}) Wins!",
                         Description = $"**Game is ended!**\n\n{PrintBoard(grid)}",
-                        Color = DiscordColor.Red,
+                        Color = TagColors.Red,
                         Timestamp = DateTime.Now
                     };
                     if (board != null) await board.DeleteAsync();
-                    await ctx.FollowUpAsync(new DiscordFollowupMessageBuilder().AddEmbed(message));
+                    await FollowupAsync(embed: message.Build());
                     if (opponent != null) tttPlayers.Remove(opponent.Id);
-                    tttPlayers.Remove(ctx.Member.Id);
+                    tttPlayers.Remove(Context.User.Id);
                     return;
                 }
                 if (xWins)
                 {
-                    message = new DiscordEmbedBuilder
+                    message = new EmbedBuilder
                     {
                         Title = opponent == null ? $"Tic-Tac-Toe Game: :x: (Bot) Wins!" : $"Tic-Tac-Toe Game: :x: ({player.Username}) Wins!",
                         Description = $"**Game is ended!**\n\n{PrintBoard(grid)}",
-                        Color = DiscordColor.Red,
+                        Color = TagColors.Red,
                         Timestamp = DateTime.Now
                     };
                     if (board != null) await board.DeleteAsync();
-                    await ctx.FollowUpAsync(new DiscordFollowupMessageBuilder().AddEmbed(message));
+                    await FollowupAsync(embed: message.Build());
                     if (opponent != null) tttPlayers.Remove(opponent.Id);
-                    tttPlayers.Remove(ctx.Member.Id);
+                    tttPlayers.Remove(Context.User.Id);
                     return;
                 }
 
@@ -574,17 +614,17 @@ public class SlashGame : ApplicationCommandModule
                 }
                 if (draw)
                 {
-                    message = new DiscordEmbedBuilder
+                    message = new EmbedBuilder
                     {
                         Title = "Tic-Tac-Toe Game: Draw!",
                         Description = $"**Game is ended!**\n\n{PrintBoard(grid)}",
-                        Color = DiscordColor.Red,
+                        Color = TagColors.Red,
                         Timestamp = DateTime.Now
                     };
                     if (board != null) await board.DeleteAsync();
-                    await ctx.FollowUpAsync(new DiscordFollowupMessageBuilder().AddEmbed(message));
+                    await FollowupAsync(embed: message.Build());
                     if (opponent != null) tttPlayers.Remove(opponent.Id);
-                    tttPlayers.Remove(ctx.Member.Id);
+                    tttPlayers.Remove(Context.User.Id);
                     return;
                 }
 
